@@ -39,9 +39,9 @@ jobs:
             child_patch_mode: run-chroot-canary
             expected: success
             run_under_strace: "true"
-          - candidate: trace-pre-exec-steps
-            child_patch_mode: trace-pre-exec-steps
-            expected: timeout
+          - candidate: skip-handle-free
+            child_patch_mode: skip-handle-free
+            expected: success
             run_under_strace: "true"
     env:
       CHILD_PATCH_MODE: ${{ matrix.child_patch_mode }}
