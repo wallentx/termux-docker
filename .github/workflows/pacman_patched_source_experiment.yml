@@ -82,9 +82,30 @@ jobs:
             echo "::endgroup::"
           }
 
+          disable_alternatives_hooks() {
+            disabled_hooks_dir="${TMPDIR:-$PREFIX/tmp}/disabled-build-hooks-${REPRO_CANDIDATE}"
+            mkdir -p "$disabled_hooks_dir"
+            for hook in "$PREFIX"/share/libalpm/hooks/pacman-alternatives-*.hook; do
+              [ -e "$hook" ] || continue
+              mv "$hook" "$disabled_hooks_dir"/
+            done
+            echo "disabled_hooks_dir=$disabled_hooks_dir"
+            ls -l "$disabled_hooks_dir" "$PREFIX/share/libalpm/hooks" 2>/dev/null || true
+          }
+
+          restore_alternatives_hooks() {
+            disabled_hooks_dir="${TMPDIR:-$PREFIX/tmp}/disabled-build-hooks-${REPRO_CANDIDATE}"
+            for hook in "$disabled_hooks_dir"/*.hook; do
+              [ -e "$hook" ] || continue
+              mv "$hook" "$PREFIX/share/libalpm/hooks"/
+            done
+            rmdir "$disabled_hooks_dir" 2>/dev/null || true
+            ls -l "$PREFIX/share/libalpm/hooks" 2>/dev/null || true
+          }
+
           install_build_deps() {
-            pacman -Sy --noconfirm
-            pacman -S --needed --noconfirm \
+            timeout --kill-after=30s 600 pacman -Sy --noconfirm
+            timeout --kill-after=30s 600 pacman -S --needed --noconfirm --noscriptlet \
               bash \
               clang \
               curl \
@@ -101,7 +122,7 @@ jobs:
               python \
               python-pip \
               tar
-            pacman -S --needed --noconfirm pkg-config || pacman -S --needed --noconfirm pkgconf
+            timeout --kill-after=30s 600 pacman -S --needed --noconfirm --noscriptlet pkg-config || timeout --kill-after=30s 600 pacman -S --needed --noconfirm --noscriptlet pkgconf
             if ! command -v meson >/dev/null 2>&1; then
               python -m pip install --user meson || python -m pip install --user --break-system-packages meson
               export PATH="$HOME/.local/bin:$PATH"
@@ -218,7 +239,17 @@ jobs:
           echo "expected=$EXPECTED_RESULT"
           echo "pacman_version=$PACMAN_VERSION"
 
+          disable_alternatives_hooks
+          set +e
           install_build_deps
+          deps_status=$?
+          restore_alternatives_hooks
+          set -e
+          if [ "$deps_status" -ne 0 ]; then
+            echo "::error::build dependency install failed with status $deps_status"
+            exit "$deps_status"
+          fi
+
           build_pacman
 
           set +e
