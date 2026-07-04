@@ -557,8 +557,20 @@ jobs:
           start = text.index(start_marker)
           parent = text.index(parent_marker, start)
           spawn_block = """    /* Test posix_spawn with pre-initialized termux-exec wrappers. */
-              execve("", NULL, NULL);
-              execv("", NULL);
+              {
+                  extern int execveat(int, const char *, char *const [], char *const [], int);
+                  extern int execvpe(const char *, char *const [], char *const []);
+                  char *const dummy_argv[] = { NULL };
+                  char *const dummy_envp[] = { NULL };
+                  pid_t dummy_pid;
+                  execve("", dummy_argv, dummy_envp);
+                  execveat(-1, "", dummy_argv, dummy_envp, 0);
+                  execv("", dummy_argv);
+                  execvp("", dummy_argv);
+                  execvpe("", dummy_argv, dummy_envp);
+                  posix_spawn(&dummy_pid, "", NULL, NULL, dummy_argv, dummy_envp);
+                  posix_spawnp(&dummy_pid, "", NULL, NULL, dummy_argv, dummy_envp);
+              }
 
               {
                   posix_spawn_file_actions_t actions;
