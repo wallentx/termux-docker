@@ -94,14 +94,18 @@ jobs:
               libarchive \
               libcurl \
               make \
-              meson \
               nettle \
               ninja \
               openssl \
               patch \
-              tar \
-              xz
+              python \
+              python-pip \
+              tar
             pacman -S --needed --noconfirm pkg-config || pacman -S --needed --noconfirm pkgconf
+            if ! command -v meson >/dev/null 2>&1; then
+              python -m pip install --user meson || python -m pip install --user --break-system-packages meson
+              export PATH="$HOME/.local/bin:$PATH"
+            fi
           }
 
           build_pacman() {
