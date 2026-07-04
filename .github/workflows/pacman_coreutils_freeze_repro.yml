@@ -93,7 +93,7 @@ jobs:
   docker-run:
     name: docker run / ${{ matrix.case }}
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 20
+    timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
@@ -135,7 +135,7 @@ jobs:
             docker ps -a || true
             docker top "$container_name" || true
             docker logs "$container_name" || true
-            timeout 30 docker exec "$container_name" /entrypoint.sh login -c "ps -ef || true; command -v pacman-alternatives || true; command -v update-alternatives || true; ls -l \"\$PREFIX/share/libalpm/hooks\" \"\$PREFIX/share/libalpm/scripts\" \"\$PREFIX/share/pacman-alternatives\" 2>/dev/null || true" || true
+            timeout --kill-after=10s 30 docker exec "$container_name" /entrypoint.sh login -c "ps -ef || true; command -v pacman-alternatives || true; command -v update-alternatives || true; ls -l \"\$PREFIX/share/libalpm/hooks\" \"\$PREFIX/share/libalpm/scripts\" \"\$PREFIX/share/pacman-alternatives\" 2>/dev/null || true" || true
             echo "::endgroup::"
           }
 
@@ -144,7 +144,7 @@ jobs:
           echo "image=$REPRO_IMAGE"
           echo "case=$REPRO_CASE"
           set +e
-          timeout "$REPRO_TIMEOUT_SECONDS" docker run \
+          timeout --kill-after=30s "$REPRO_TIMEOUT_SECONDS" docker run \
             --name "$container_name" \
             --privileged \
             "$REPRO_IMAGE" \
