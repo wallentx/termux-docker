@@ -53,6 +53,12 @@ jobs:
           - candidate: minimal-raw-syscall-execve
             child_patch_mode: minimal-raw-execve
             expected: success
+          - candidate: minimal-no-chdir-raw-execve
+            child_patch_mode: minimal-no-chdir-raw-execve
+            expected: success
+          - candidate: trace-minimal-raw-execve
+            child_patch_mode: trace-minimal-raw-execve
+            expected: timeout
     env:
       CHILD_PATCH_MODE: ${{ matrix.child_patch_mode }}
       EXPECTED_RESULT: ${{ matrix.expected }}
@@ -228,6 +234,35 @@ jobs:
                   -e 's|^[[:space:]]*execv(cmd, argv);|		syscall(SYS_execve, cmd, argv, environ);|' \
                   "$src_dir/lib/libalpm/util.c"
                 ;;
+              minimal-no-chdir-raw-execve)
+                sed -i '/#include <sys\/syscall.h>/a extern char **environ;' "$src_dir/lib/libalpm/util.c"
+                sed -i \
+                  -e '/^[[:space:]]*if(chdir("\/") != 0) {/,/^[[:space:]]*}/c\		/* skipped chdir("/") before execv for Termux freeze experiment */' \
+                  -e 's|^[[:space:]]*setenv("SHLVL", "1", 0);|		/* skipped setenv("SHLVL", "1", 0) before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*unsetenv("BASH_ENV");|		/* skipped unsetenv("BASH_ENV") before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*umask(0022);|		/* skipped umask(0022) before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*_alpm_reset_signals();|		/* skipped _alpm_reset_signals() before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*_alpm_handle_free(handle);|		/* skipped _alpm_handle_free(handle) before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*execv(cmd, argv);|		syscall(SYS_execve, cmd, argv, environ);|' \
+                  "$src_dir/lib/libalpm/util.c"
+                ;;
+              trace-minimal-raw-execve)
+                sed -i '/#include <sys\/syscall.h>/a extern char **environ;' "$src_dir/lib/libalpm/util.c"
+                sed -i \
+                  -e 's|^[[:space:]]*setenv("SHLVL", "1", 0);|		/* skipped setenv("SHLVL", "1", 0) before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*unsetenv("BASH_ENV");|		/* skipped unsetenv("BASH_ENV") before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*umask(0022);|		/* skipped umask(0022) before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*_alpm_reset_signals();|		/* skipped _alpm_reset_signals() before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*_alpm_handle_free(handle);|		/* skipped _alpm_handle_free(handle) before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*execv(cmd, argv);|		syscall(SYS_execve, cmd, argv, environ);|' \
+                  "$src_dir/lib/libalpm/util.c"
+                sed -i \
+                  -e '/if(cwdfd >= 0) {/i\		syscall(SYS_write, 2, "PACMAN_CHILD after_fd_setup\\n", sizeof("PACMAN_CHILD after_fd_setup\\n") - 1);' \
+                  -e '/if(chdir("\/") != 0) {/i\		syscall(SYS_write, 2, "PACMAN_CHILD before_chdir\\n", sizeof("PACMAN_CHILD before_chdir\\n") - 1);' \
+                  -e '/\/\* skipped setenv("SHLVL"/i\		syscall(SYS_write, 2, "PACMAN_CHILD after_chdir\\n", sizeof("PACMAN_CHILD after_chdir\\n") - 1);' \
+                  -e '/syscall(SYS_execve, cmd, argv, environ);/i\		syscall(SYS_write, 2, "PACMAN_CHILD before_execve\\n", sizeof("PACMAN_CHILD before_execve\\n") - 1);' \
+                  "$src_dir/lib/libalpm/util.c"
+                ;;
               *)
                 echo "::error::unknown CHILD_PATCH_MODE=$CHILD_PATCH_MODE"
                 exit 1
@@ -235,7 +270,7 @@ jobs:
             esac
 
             echo "::group::patched source markers"
-            grep -n "environ\\|setenv(\"SHLVL\"\\|unsetenv(\"BASH_ENV\"\\|umask(0022)\\|_alpm_reset_signals()\\|_alpm_handle_free(handle)\\|skipped .* before execv\\|execv(cmd, argv)\\|SYS_execve\\|char ibuf" \
+            grep -n "PACMAN_CHILD\\|environ\\|chdir(\"/\"\\|setenv(\"SHLVL\"\\|unsetenv(\"BASH_ENV\"\\|umask(0022)\\|_alpm_reset_signals()\\|_alpm_handle_free(handle)\\|skipped .* before execv\\|execv(cmd, argv)\\|SYS_execve\\|char ibuf" \
               "$src_dir/lib/libalpm/util.c" || true
             echo "::endgroup::"
 
