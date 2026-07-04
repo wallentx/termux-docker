@@ -666,9 +666,9 @@ jobs:
           path = Path(sys.argv[1])
           text = path.read_text()
           pattern = r'(int\s+_alpm_run_chroot\s*\([^)]*\)\s*\{)'
-          replacement = r'''\1
-              _alpm_log(handle, ALPM_LOG_ERROR, _("PACMAN_CANARY _alpm_run_chroot reached for %s\n"), cmd);
-              return 77;'''
+          def replacement(match):
+              return match.group(1) + '\n\t_alpm_log(handle, ALPM_LOG_ERROR, _("PACMAN_CANARY _alpm_run_chroot reached for %s\\n"), cmd);\n\treturn 77;'
+
           text, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
           if count != 1:
               raise SystemExit("could not insert _alpm_run_chroot canary")
@@ -713,7 +713,15 @@ jobs:
             if [ ! -x "$pacman_bin" ]; then
               pacman_bin="$build_dir/src/pacman/pacman"
             fi
-            libalpm_dir="$build_dir/lib/libalpm"
+            libalpm_so="$(find "$build_dir" -maxdepth 4 -type f -name 'libalpm.so' -print | head -n 1)"
+            libalpm_dir="${libalpm_so%/*}"
+            if [ -z "$libalpm_so" ] || [ ! -f "$libalpm_so" ]; then
+              echo "::group::built pacman artifacts"
+              find "$build_dir" -maxdepth 4 \( -name 'pacman*' -o -name 'libalpm*.so*' \) -exec ls -l {} \; || true
+              echo "::endgroup::"
+              echo "::error::built libalpm.so not found"
+              return 127
+            fi
 
             if [ ! -x "$pacman_bin" ]; then
               echo "::group::built pacman artifacts"
@@ -726,6 +734,7 @@ jobs:
             export LD_LIBRARY_PATH="$libalpm_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
             echo "::group::runtime library probe"
             echo "pacman_bin=$pacman_bin"
+            echo "libalpm_so=$libalpm_so"
             echo "libalpm_dir=$libalpm_dir"
             echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
             ls -l "$pacman_bin" "$libalpm_dir" "$libalpm_dir"/libalpm*.so* "$PREFIX"/lib/libalpm*.so* 2>/dev/null || true
