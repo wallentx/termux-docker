@@ -14,11 +14,11 @@ on:
       timeout_seconds:
         description: Seconds before the candidate test is treated as frozen.
         required: true
-        default: "180"
+        default: "60"
       diagnostic_after_seconds:
         description: Seconds before dumping process state for a still-running test.
         required: true
-        default: "90"
+        default: "25"
 
 permissions:
   contents: read
