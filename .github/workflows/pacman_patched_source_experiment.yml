@@ -35,20 +35,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - candidate: termux-patch-control
-            child_patch_mode: control
-            expected: timeout
-            run_under_strace: "false"
           - candidate: run-chroot-canary
             child_patch_mode: run-chroot-canary
-            expected: failure
+            expected: success
             run_under_strace: "true"
-          - candidate: trace-child-entry
-            child_patch_mode: trace-child-entry
-            expected: timeout
-            run_under_strace: "true"
-          - candidate: raw-clone-child-entry
-            child_patch_mode: raw-clone-child-entry
+          - candidate: trace-pre-exec-steps
+            child_patch_mode: trace-pre-exec-steps
             expected: timeout
             run_under_strace: "true"
     env:
@@ -630,7 +622,7 @@ jobs:
                   -e '/syscall(SYS_execve, cmd, argv, environ);/i\		syscall(SYS_write, 2, "PACMAN_CHILD before_execve\\n", sizeof("PACMAN_CHILD before_execve\\n") - 1);' \
                   "$src_dir/lib/libalpm/util.c"
                 ;;
-              trace-child-entry|raw-clone-child-entry)
+              trace-child-entry|raw-clone-child-entry|trace-pre-exec-steps)
                 sed -i \
                   -e '/^[[:space:]]*pid = fork();/i\		syscall(SYS_write, 2, "PACMAN_PARENT before_child_create\\n", sizeof("PACMAN_PARENT before_child_create\\n") - 1);' \
                   -e '/^[[:space:]]*pid = fork();/a\		if(pid == 0) syscall(SYS_write, 2, "PACMAN_CHILD returned_from_child_create\\n", sizeof("PACMAN_CHILD returned_from_child_create\\n") - 1); else if(pid > 0) syscall(SYS_write, 2, "PACMAN_PARENT returned_from_child_create\\n", sizeof("PACMAN_PARENT returned_from_child_create\\n") - 1);' \
@@ -656,6 +648,22 @@ jobs:
                   -e '/^[[:space:]]*close(parent2child_pipefd\[TAIL\]);/i\		syscall(SYS_write, child2parent_pipefd[HEAD], "PACMAN_CHILD before_close_pipefds\\n", sizeof("PACMAN_CHILD before_close_pipefds\\n") - 1);' \
                   -e '/if(cwdfd >= 0) {/i\		syscall(SYS_write, 2, "PACMAN_CHILD after_fd_setup\\n", sizeof("PACMAN_CHILD after_fd_setup\\n") - 1);' \
                   "$src_dir/lib/libalpm/util.c"
+                if [ "$CHILD_PATCH_MODE" = "trace-pre-exec-steps" ]; then
+                  sed -i \
+                    -e '/if(chdir("\/") != 0) {/i\		syscall(SYS_write, 2, "PACMAN_CHILD after_cwdfd_before_chdir\\n", sizeof("PACMAN_CHILD after_cwdfd_before_chdir\\n") - 1);' \
+                    -e '/^[[:space:]]*setenv("SHLVL", "1", 0);/i\		syscall(SYS_write, 2, "PACMAN_CHILD after_chdir_before_setenv\\n", sizeof("PACMAN_CHILD after_chdir_before_setenv\\n") - 1);' \
+                    -e '/^[[:space:]]*setenv("SHLVL", "1", 0);/a\		syscall(SYS_write, 2, "PACMAN_CHILD after_setenv\\n", sizeof("PACMAN_CHILD after_setenv\\n") - 1);' \
+                    -e '/^[[:space:]]*unsetenv("BASH_ENV");/i\		syscall(SYS_write, 2, "PACMAN_CHILD before_unsetenv\\n", sizeof("PACMAN_CHILD before_unsetenv\\n") - 1);' \
+                    -e '/^[[:space:]]*unsetenv("BASH_ENV");/a\		syscall(SYS_write, 2, "PACMAN_CHILD after_unsetenv\\n", sizeof("PACMAN_CHILD after_unsetenv\\n") - 1);' \
+                    -e '/^[[:space:]]*umask(0022);/i\		syscall(SYS_write, 2, "PACMAN_CHILD before_umask\\n", sizeof("PACMAN_CHILD before_umask\\n") - 1);' \
+                    -e '/^[[:space:]]*umask(0022);/a\		syscall(SYS_write, 2, "PACMAN_CHILD after_umask\\n", sizeof("PACMAN_CHILD after_umask\\n") - 1);' \
+                    -e '/^[[:space:]]*_alpm_reset_signals();/i\		syscall(SYS_write, 2, "PACMAN_CHILD before_reset_signals\\n", sizeof("PACMAN_CHILD before_reset_signals\\n") - 1);' \
+                    -e '/^[[:space:]]*_alpm_reset_signals();/a\		syscall(SYS_write, 2, "PACMAN_CHILD after_reset_signals\\n", sizeof("PACMAN_CHILD after_reset_signals\\n") - 1);' \
+                    -e '/^[[:space:]]*_alpm_handle_free(handle);/i\		syscall(SYS_write, 2, "PACMAN_CHILD before_handle_free\\n", sizeof("PACMAN_CHILD before_handle_free\\n") - 1);' \
+                    -e '/^[[:space:]]*_alpm_handle_free(handle);/a\		syscall(SYS_write, 2, "PACMAN_CHILD after_handle_free\\n", sizeof("PACMAN_CHILD after_handle_free\\n") - 1);' \
+                    -e '/^[[:space:]]*execv(cmd, argv);/i\		syscall(SYS_write, 2, "PACMAN_CHILD before_execv\\n", sizeof("PACMAN_CHILD before_execv\\n") - 1);' \
+                    "$src_dir/lib/libalpm/util.c"
+                fi
                 ;;
               run-chroot-canary)
                 python - "$src_dir/lib/libalpm/util.c" <<'PY'
