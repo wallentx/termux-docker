@@ -47,6 +47,10 @@ jobs:
             child_patch_mode: trace-child-entry
             expected: timeout
             run_under_strace: "true"
+          - candidate: raw-clone-child-entry
+            child_patch_mode: raw-clone-child-entry
+            expected: success
+            run_under_strace: "false"
     env:
       CHILD_PATCH_MODE: ${{ matrix.child_patch_mode }}
       EXPECTED_RESULT: ${{ matrix.expected }}
@@ -253,7 +257,11 @@ jobs:
                   -e '/syscall(SYS_execve, cmd, argv, environ);/i\		syscall(SYS_write, 2, "PACMAN_CHILD before_execve\\n", sizeof("PACMAN_CHILD before_execve\\n") - 1);' \
                   "$src_dir/lib/libalpm/util.c"
                 ;;
-              trace-child-entry)
+              trace-child-entry|raw-clone-child-entry)
+                if [ "$CHILD_PATCH_MODE" = "raw-clone-child-entry" ]; then
+                  sed -i 's|^[[:space:]]*pid = fork();|	pid = syscall(SYS_clone, SIGCHLD, NULL, NULL, NULL, NULL);|' \
+                    "$src_dir/lib/libalpm/util.c"
+                fi
                 sed -i \
                   -e '/if(pid == 0) {/a\		syscall(SYS_write, child2parent_pipefd[HEAD], "PACMAN_CHILD child_entry\\n", sizeof("PACMAN_CHILD child_entry\\n") - 1);' \
                   -e '/^[[:space:]]*close(0);/i\		syscall(SYS_write, child2parent_pipefd[HEAD], "PACMAN_CHILD before_close0\\n", sizeof("PACMAN_CHILD before_close0\\n") - 1);' \
@@ -279,7 +287,7 @@ jobs:
             esac
 
             echo "::group::patched source markers"
-            grep -n "PACMAN_CHILD\\|environ\\|close(0)\\|close(1)\\|close(2)\\|dup2\\|chdir(\"/\"\\|setenv(\"SHLVL\"\\|unsetenv(\"BASH_ENV\"\\|umask(0022)\\|_alpm_reset_signals()\\|_alpm_handle_free(handle)\\|skipped .* before execv\\|execv(cmd, argv)\\|SYS_execve\\|char ibuf" \
+            grep -n "PACMAN_CHILD\\|environ\\|pid = .*SYS_clone\\|pid = fork\\|close(0)\\|close(1)\\|close(2)\\|dup2\\|chdir(\"/\"\\|setenv(\"SHLVL\"\\|unsetenv(\"BASH_ENV\"\\|umask(0022)\\|_alpm_reset_signals()\\|_alpm_handle_free(handle)\\|skipped .* before execv\\|execv(cmd, argv)\\|SYS_execve\\|char ibuf" \
               "$src_dir/lib/libalpm/util.c" || true
             echo "::endgroup::"
 
