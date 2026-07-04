@@ -62,9 +62,27 @@ jobs:
           set -eu
 
           dump_processes() {
+            # shellcheck disable=SC2016
+            termux_diag='
+            ps -ef || true
+            for pid in $(ps -ef | awk "/[p]acman/ { print \$2 }"); do
+              echo "proc pid=$pid"
+              printf "cmdline="
+              tr "\000" " " < "/proc/$pid/cmdline" 2>/dev/null || true
+              echo
+              printf "wchan="
+              cat "/proc/$pid/wchan" 2>/dev/null || true
+              echo
+              sed -n "1,80p" "/proc/$pid/status" 2>/dev/null || true
+              ls -l "/proc/$pid/fd" 2>/dev/null || true
+            done
+            command -v pacman-alternatives || true
+            command -v update-alternatives || true
+            ls -l "$PREFIX/share/libalpm/hooks" "$PREFIX/share/libalpm/scripts" "$PREFIX/share/pacman-alternatives" 2>/dev/null || true
+            '
             echo "::group::process dump"
             ps -ef || true
-            timeout 30 /entrypoint.sh login -c "ps -ef || true; command -v pacman-alternatives || true; command -v update-alternatives || true; ls -l \"\$PREFIX/share/libalpm/hooks\" \"\$PREFIX/share/libalpm/scripts\" \"\$PREFIX/share/pacman-alternatives\" 2>/dev/null || true" || true
+            timeout 30 /entrypoint.sh login -c "$termux_diag" || true
             echo "::endgroup::"
           }
 
@@ -169,11 +187,29 @@ jobs:
           $REPRO_COMMAND"
 
           dump_container() {
+            # shellcheck disable=SC2016
+            termux_diag='
+            ps -ef || true
+            for pid in $(ps -ef | awk "/[p]acman/ { print \$2 }"); do
+              echo "proc pid=$pid"
+              printf "cmdline="
+              tr "\000" " " < "/proc/$pid/cmdline" 2>/dev/null || true
+              echo
+              printf "wchan="
+              cat "/proc/$pid/wchan" 2>/dev/null || true
+              echo
+              sed -n "1,80p" "/proc/$pid/status" 2>/dev/null || true
+              ls -l "/proc/$pid/fd" 2>/dev/null || true
+            done
+            command -v pacman-alternatives || true
+            command -v update-alternatives || true
+            ls -l "$PREFIX/share/libalpm/hooks" "$PREFIX/share/libalpm/scripts" "$PREFIX/share/pacman-alternatives" 2>/dev/null || true
+            '
             echo "::group::docker container dump"
             docker ps -a || true
             docker top "$container_name" || true
             docker logs "$container_name" || true
-            timeout --kill-after=10s 30 docker exec "$container_name" /entrypoint.sh login -c "ps -ef || true; command -v pacman-alternatives || true; command -v update-alternatives || true; ls -l \"\$PREFIX/share/libalpm/hooks\" \"\$PREFIX/share/libalpm/scripts\" \"\$PREFIX/share/pacman-alternatives\" 2>/dev/null || true" || true
+            timeout --kill-after=10s 30 docker exec "$container_name" /entrypoint.sh login -c "$termux_diag" || true
             echo "::endgroup::"
           }
 
