@@ -38,27 +38,15 @@ jobs:
           - candidate: termux-patch-control
             child_patch_mode: control
             expected: timeout
-          - candidate: skip-child-handle-free
-            child_patch_mode: skip-handle-free
+            run_under_strace: "false"
+          - candidate: trace-child-entry
+            child_patch_mode: trace-child-entry
             expected: timeout
-          - candidate: skip-child-env
-            child_patch_mode: skip-env
+            run_under_strace: "false"
+          - candidate: strace-child-entry
+            child_patch_mode: trace-child-entry
             expected: timeout
-          - candidate: minimal-child-pre-exec
-            child_patch_mode: minimal-pre-exec
-            expected: timeout
-          - candidate: raw-syscall-execve
-            child_patch_mode: raw-execve
-            expected: success
-          - candidate: minimal-raw-syscall-execve
-            child_patch_mode: minimal-raw-execve
-            expected: success
-          - candidate: minimal-no-chdir-raw-execve
-            child_patch_mode: minimal-no-chdir-raw-execve
-            expected: success
-          - candidate: trace-minimal-raw-execve
-            child_patch_mode: trace-minimal-raw-execve
-            expected: timeout
+            run_under_strace: "true"
     env:
       CHILD_PATCH_MODE: ${{ matrix.child_patch_mode }}
       EXPECTED_RESULT: ${{ matrix.expected }}
@@ -67,6 +55,7 @@ jobs:
       REPRO_DIAG_AFTER_SECONDS: ${{ inputs.diagnostic_after_seconds }}
       REPRO_IMAGE: ${{ inputs.image }}
       REPRO_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+      RUN_UNDER_STRACE: ${{ matrix.run_under_strace }}
     steps:
       - name: Build patched pacman and test coreutils reinstall
         run: |
@@ -141,6 +130,7 @@ jobs:
               patch \
               python \
               python-pip \
+              strace \
               tar
             timeout --kill-after=30s 600 pacman -S --needed --noconfirm --noscriptlet pkg-config || timeout --kill-after=30s 600 pacman -S --needed --noconfirm --noscriptlet pkgconf
             if ! command -v meson >/dev/null 2>&1; then
@@ -263,6 +253,25 @@ jobs:
                   -e '/syscall(SYS_execve, cmd, argv, environ);/i\		syscall(SYS_write, 2, "PACMAN_CHILD before_execve\\n", sizeof("PACMAN_CHILD before_execve\\n") - 1);' \
                   "$src_dir/lib/libalpm/util.c"
                 ;;
+              trace-child-entry)
+                sed -i \
+                  -e '/if(pid == 0) {/a\		syscall(SYS_write, child2parent_pipefd[HEAD], "PACMAN_CHILD child_entry\\n", sizeof("PACMAN_CHILD child_entry\\n") - 1);' \
+                  -e '/^[[:space:]]*close(0);/i\		syscall(SYS_write, child2parent_pipefd[HEAD], "PACMAN_CHILD before_close0\\n", sizeof("PACMAN_CHILD before_close0\\n") - 1);' \
+                  -e '/^[[:space:]]*close(0);/a\		syscall(SYS_write, child2parent_pipefd[HEAD], "PACMAN_CHILD after_close0\\n", sizeof("PACMAN_CHILD after_close0\\n") - 1);' \
+                  -e '/^[[:space:]]*close(1);/i\		syscall(SYS_write, child2parent_pipefd[HEAD], "PACMAN_CHILD before_close1\\n", sizeof("PACMAN_CHILD before_close1\\n") - 1);' \
+                  -e '/^[[:space:]]*close(1);/a\		syscall(SYS_write, child2parent_pipefd[HEAD], "PACMAN_CHILD after_close1\\n", sizeof("PACMAN_CHILD after_close1\\n") - 1);' \
+                  -e '/^[[:space:]]*close(2);/i\		syscall(SYS_write, child2parent_pipefd[HEAD], "PACMAN_CHILD before_close2\\n", sizeof("PACMAN_CHILD before_close2\\n") - 1);' \
+                  -e '/^[[:space:]]*close(2);/a\		syscall(SYS_write, child2parent_pipefd[HEAD], "PACMAN_CHILD after_close2\\n", sizeof("PACMAN_CHILD after_close2\\n") - 1);' \
+                  -e '/while(dup2(child2parent_pipefd\[HEAD\], 1)/i\		syscall(SYS_write, child2parent_pipefd[HEAD], "PACMAN_CHILD before_dup_stdout\\n", sizeof("PACMAN_CHILD before_dup_stdout\\n") - 1);' \
+                  -e '/while(dup2(child2parent_pipefd\[HEAD\], 1)/a\		syscall(SYS_write, child2parent_pipefd[HEAD], "PACMAN_CHILD after_dup_stdout\\n", sizeof("PACMAN_CHILD after_dup_stdout\\n") - 1);' \
+                  -e '/while(dup2(child2parent_pipefd\[HEAD\], 2)/i\		syscall(SYS_write, child2parent_pipefd[HEAD], "PACMAN_CHILD before_dup_stderr\\n", sizeof("PACMAN_CHILD before_dup_stderr\\n") - 1);' \
+                  -e '/while(dup2(child2parent_pipefd\[HEAD\], 2)/a\		syscall(SYS_write, child2parent_pipefd[HEAD], "PACMAN_CHILD after_dup_stderr\\n", sizeof("PACMAN_CHILD after_dup_stderr\\n") - 1);' \
+                  -e '/while(dup2(parent2child_pipefd\[TAIL\], 0)/i\		syscall(SYS_write, child2parent_pipefd[HEAD], "PACMAN_CHILD before_dup_stdin\\n", sizeof("PACMAN_CHILD before_dup_stdin\\n") - 1);' \
+                  -e '/while(dup2(parent2child_pipefd\[TAIL\], 0)/a\		syscall(SYS_write, child2parent_pipefd[HEAD], "PACMAN_CHILD after_dup_stdin\\n", sizeof("PACMAN_CHILD after_dup_stdin\\n") - 1);' \
+                  -e '/^[[:space:]]*close(parent2child_pipefd\[TAIL\]);/i\		syscall(SYS_write, child2parent_pipefd[HEAD], "PACMAN_CHILD before_close_pipefds\\n", sizeof("PACMAN_CHILD before_close_pipefds\\n") - 1);' \
+                  -e '/if(cwdfd >= 0) {/i\		syscall(SYS_write, 2, "PACMAN_CHILD after_fd_setup\\n", sizeof("PACMAN_CHILD after_fd_setup\\n") - 1);' \
+                  "$src_dir/lib/libalpm/util.c"
+                ;;
               *)
                 echo "::error::unknown CHILD_PATCH_MODE=$CHILD_PATCH_MODE"
                 exit 1
@@ -270,7 +279,7 @@ jobs:
             esac
 
             echo "::group::patched source markers"
-            grep -n "PACMAN_CHILD\\|environ\\|chdir(\"/\"\\|setenv(\"SHLVL\"\\|unsetenv(\"BASH_ENV\"\\|umask(0022)\\|_alpm_reset_signals()\\|_alpm_handle_free(handle)\\|skipped .* before execv\\|execv(cmd, argv)\\|SYS_execve\\|char ibuf" \
+            grep -n "PACMAN_CHILD\\|environ\\|close(0)\\|close(1)\\|close(2)\\|dup2\\|chdir(\"/\"\\|setenv(\"SHLVL\"\\|unsetenv(\"BASH_ENV\"\\|umask(0022)\\|_alpm_reset_signals()\\|_alpm_handle_free(handle)\\|skipped .* before execv\\|execv(cmd, argv)\\|SYS_execve\\|char ibuf" \
               "$src_dir/lib/libalpm/util.c" || true
             echo "::endgroup::"
 
@@ -316,7 +325,13 @@ jobs:
             "$pacman_bin" -Q pacman coreutils pacman-alternatives || true
 
             echo "::group::candidate test"
-            "$pacman_bin" -S coreutils --noconfirm --overwrite='*' &
+            trace_prefix="${TMPDIR:-$PREFIX/tmp}/pacman-source-${REPRO_CANDIDATE}-strace"
+            rm -f "$trace_prefix".* 2>/dev/null || true
+            if [ "$RUN_UNDER_STRACE" = "true" ]; then
+              strace -ff -tt -s 200 -o "$trace_prefix" "$pacman_bin" -S coreutils --noconfirm --overwrite='*' &
+            else
+              "$pacman_bin" -S coreutils --noconfirm --overwrite='*' &
+            fi
             command_pid=$!
             (
               sleep "$REPRO_DIAG_AFTER_SECONDS"
@@ -351,9 +366,27 @@ jobs:
                 echo "::error::candidate timed out after ${REPRO_TIMEOUT_SECONDS}s"
               fi
               dump_processes
+              if [ "$RUN_UNDER_STRACE" = "true" ]; then
+                echo "::group::strace tails"
+                for trace_file in "$trace_prefix".*; do
+                  [ -e "$trace_file" ] || continue
+                  echo "== $trace_file =="
+                  tail -n 160 "$trace_file" || true
+                done
+                echo "::endgroup::"
+              fi
             elif [ "$status" -ne 0 ]; then
               echo "::error::candidate failed with status $status"
               dump_processes
+              if [ "$RUN_UNDER_STRACE" = "true" ]; then
+                echo "::group::strace tails"
+                for trace_file in "$trace_prefix".*; do
+                  [ -e "$trace_file" ] || continue
+                  echo "== $trace_file =="
+                  tail -n 160 "$trace_file" || true
+                done
+                echo "::endgroup::"
+              fi
             fi
             echo "::endgroup::"
             set +e
@@ -365,6 +398,7 @@ jobs:
           echo "child_patch_mode=$CHILD_PATCH_MODE"
           echo "expected=$EXPECTED_RESULT"
           echo "pacman_version=$PACMAN_VERSION"
+          echo "run_under_strace=$RUN_UNDER_STRACE"
 
           disable_alternatives_hooks
           set +e
@@ -404,4 +438,4 @@ jobs:
 
           chmod +x "$script"
           /entrypoint.sh login -c \
-            "CHILD_PATCH_MODE='$CHILD_PATCH_MODE' EXPECTED_RESULT='$EXPECTED_RESULT' PACMAN_VERSION='$PACMAN_VERSION' REPRO_CANDIDATE='$REPRO_CANDIDATE' REPRO_DIAG_AFTER_SECONDS='$REPRO_DIAG_AFTER_SECONDS' REPRO_IMAGE='$REPRO_IMAGE' REPRO_TIMEOUT_SECONDS='$REPRO_TIMEOUT_SECONDS' bash '$script'"
+            "CHILD_PATCH_MODE='$CHILD_PATCH_MODE' EXPECTED_RESULT='$EXPECTED_RESULT' PACMAN_VERSION='$PACMAN_VERSION' REPRO_CANDIDATE='$REPRO_CANDIDATE' REPRO_DIAG_AFTER_SECONDS='$REPRO_DIAG_AFTER_SECONDS' REPRO_IMAGE='$REPRO_IMAGE' REPRO_TIMEOUT_SECONDS='$REPRO_TIMEOUT_SECONDS' RUN_UNDER_STRACE='$RUN_UNDER_STRACE' bash '$script'"
