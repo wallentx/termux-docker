@@ -36,11 +36,14 @@ jobs:
           - case: noscriptlet-after-upgrade
             prep: pacman -Syu --noconfirm
             command: pacman -S coreutils --noconfirm --overwrite=* --noscriptlet
+          - case: empty-hookdir
+            prep: ""
+            command: mkdir -p "$TMPDIR/no-alpm-hooks"; pacman -S coreutils --noconfirm --overwrite=* --noscriptlet --hookdir "$TMPDIR/no-alpm-hooks"
           - case: manual-alternatives
-            prep: pacman -S coreutils --noconfirm --overwrite=* --noscriptlet
+            prep: ""
             command: PA_VERBOSE=true pacman-alternatives -Ea cat --overwrite
           - case: hook-stdin
-            prep: pacman -S coreutils --noconfirm --overwrite=* --noscriptlet
+            prep: ""
             command: printf '%s\n' '/data/data/com.termux/files/usr/share/pacman-alternatives/cat.alt' | PA_VERBOSE=true /data/data/com.termux/files/usr/share/libalpm/scripts/run-pacman-alternatives enable
     env:
       REPRO_CASE: ${{ matrix.case }}
@@ -104,11 +107,14 @@ jobs:
           - case: noscriptlet-after-upgrade
             prep: pacman -Syu --noconfirm
             command: pacman -S coreutils --noconfirm --overwrite=* --noscriptlet
+          - case: empty-hookdir
+            prep: ""
+            command: mkdir -p "$TMPDIR/no-alpm-hooks"; pacman -S coreutils --noconfirm --overwrite=* --noscriptlet --hookdir "$TMPDIR/no-alpm-hooks"
           - case: manual-alternatives
-            prep: pacman -S coreutils --noconfirm --overwrite=* --noscriptlet
+            prep: ""
             command: PA_VERBOSE=true pacman-alternatives -Ea cat --overwrite
           - case: hook-stdin
-            prep: pacman -S coreutils --noconfirm --overwrite=* --noscriptlet
+            prep: ""
             command: printf '%s\n' '/data/data/com.termux/files/usr/share/pacman-alternatives/cat.alt' | PA_VERBOSE=true /data/data/com.termux/files/usr/share/libalpm/scripts/run-pacman-alternatives enable
     env:
       REPRO_CASE: ${{ matrix.case }}
