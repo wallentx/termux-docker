@@ -43,6 +43,12 @@ jobs:
           - case: empty-hookdir
             prep: ""
             command: mkdir -p "$TMPDIR/no-alpm-hooks"; pacman -S coreutils --noconfirm --overwrite=* --noscriptlet --hookdir "$TMPDIR/no-alpm-hooks"
+          - case: alternatives-hooks-disabled
+            prep: ""
+            command: mkdir -p "$TMPDIR/disabled-alpm-hooks"; mv "$PREFIX"/share/libalpm/hooks/pacman-alternatives-*.hook "$TMPDIR/disabled-alpm-hooks"/; pacman -S coreutils --noconfirm --overwrite=*
+          - case: strace-baseline
+            prep: command -v strace >/dev/null 2>&1 || pacman -S strace --noconfirm
+            command: strace -ff -tt -s 200 -o "$TMPDIR/pacman-coreutils.trace" pacman -S coreutils --noconfirm --overwrite=*
           - case: manual-alternatives
             prep: ""
             command: PA_VERBOSE=true pacman-alternatives -Ea cat --overwrite
@@ -75,6 +81,12 @@ jobs:
               echo
               sed -n "1,80p" "/proc/$pid/status" 2>/dev/null || true
               ls -l "/proc/$pid/fd" 2>/dev/null || true
+            done
+            for trace in "$TMPDIR"/pacman-coreutils.trace*; do
+              if [ -f "$trace" ]; then
+                echo "trace tail: $trace"
+                tail -n 80 "$trace" || true
+              fi
             done
             command -v pacman-alternatives || true
             command -v update-alternatives || true
@@ -159,6 +171,12 @@ jobs:
           - case: empty-hookdir
             prep: ""
             command: mkdir -p "$TMPDIR/no-alpm-hooks"; pacman -S coreutils --noconfirm --overwrite=* --noscriptlet --hookdir "$TMPDIR/no-alpm-hooks"
+          - case: alternatives-hooks-disabled
+            prep: ""
+            command: mkdir -p "$TMPDIR/disabled-alpm-hooks"; mv "$PREFIX"/share/libalpm/hooks/pacman-alternatives-*.hook "$TMPDIR/disabled-alpm-hooks"/; pacman -S coreutils --noconfirm --overwrite=*
+          - case: strace-baseline
+            prep: command -v strace >/dev/null 2>&1 || pacman -S strace --noconfirm
+            command: strace -ff -tt -s 200 -o "$TMPDIR/pacman-coreutils.trace" pacman -S coreutils --noconfirm --overwrite=*
           - case: manual-alternatives
             prep: ""
             command: PA_VERBOSE=true pacman-alternatives -Ea cat --overwrite
@@ -200,6 +218,12 @@ jobs:
               echo
               sed -n "1,80p" "/proc/$pid/status" 2>/dev/null || true
               ls -l "/proc/$pid/fd" 2>/dev/null || true
+            done
+            for trace in "$TMPDIR"/pacman-coreutils.trace*; do
+              if [ -f "$trace" ]; then
+                echo "trace tail: $trace"
+                tail -n 80 "$trace" || true
+              fi
             done
             command -v pacman-alternatives || true
             command -v update-alternatives || true
