@@ -49,6 +49,10 @@ jobs:
             run_under_strace: "true"
           - candidate: raw-clone-child-entry
             child_patch_mode: raw-clone-child-entry
+            expected: timeout
+            run_under_strace: "false"
+          - candidate: vfork-minimal-raw-execve
+            child_patch_mode: vfork-minimal-raw-execve
             expected: success
             run_under_strace: "false"
     env:
@@ -217,6 +221,19 @@ jobs:
                 sed -i 's|^[[:space:]]*execv(cmd, argv);|		syscall(SYS_execve, cmd, argv, environ);|' \
                   "$src_dir/lib/libalpm/util.c"
                 ;;
+              vfork-minimal-raw-execve)
+                sed -i '/#include <sys\/syscall.h>/a extern char **environ;' "$src_dir/lib/libalpm/util.c"
+                sed -i \
+                  -e 's|^[[:space:]]*pid = fork();|	pid = vfork();|' \
+                  -e 's|^[[:space:]]*setenv("SHLVL", "1", 0);|		/* skipped setenv("SHLVL", "1", 0) before vfork execve for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*unsetenv("BASH_ENV");|		/* skipped unsetenv("BASH_ENV") before vfork execve for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*umask(0022);|		/* skipped umask(0022) before vfork execve for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*_alpm_reset_signals();|		/* skipped _alpm_reset_signals() before vfork execve for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*_alpm_handle_free(handle);|		/* skipped _alpm_handle_free(handle) before vfork execve for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*execv(cmd, argv);|		syscall(SYS_execve, cmd, argv, environ);|' \
+                  -e 's|^[[:space:]]*exit(1);|		_exit(1);|' \
+                  "$src_dir/lib/libalpm/util.c"
+                ;;
               minimal-raw-execve)
                 sed -i '/#include <sys\/syscall.h>/a extern char **environ;' "$src_dir/lib/libalpm/util.c"
                 sed -i \
@@ -287,7 +304,7 @@ jobs:
             esac
 
             echo "::group::patched source markers"
-            grep -n "PACMAN_CHILD\\|environ\\|pid = .*SYS_clone\\|pid = fork\\|close(0)\\|close(1)\\|close(2)\\|dup2\\|chdir(\"/\"\\|setenv(\"SHLVL\"\\|unsetenv(\"BASH_ENV\"\\|umask(0022)\\|_alpm_reset_signals()\\|_alpm_handle_free(handle)\\|skipped .* before execv\\|execv(cmd, argv)\\|SYS_execve\\|char ibuf" \
+            grep -n "PACMAN_CHILD\\|environ\\|pid = .*SYS_clone\\|pid = fork\\|pid = vfork\\|close(0)\\|close(1)\\|close(2)\\|dup2\\|chdir(\"/\"\\|setenv(\"SHLVL\"\\|unsetenv(\"BASH_ENV\"\\|umask(0022)\\|_alpm_reset_signals()\\|_alpm_handle_free(handle)\\|skipped .* before execv\\|execv(cmd, argv)\\|SYS_execve\\|_exit(1)\\|char ibuf" \
               "$src_dir/lib/libalpm/util.c" || true
             echo "::endgroup::"
 
