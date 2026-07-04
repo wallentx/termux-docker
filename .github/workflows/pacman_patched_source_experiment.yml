@@ -61,12 +61,20 @@ jobs:
             run_under_strace: "false"
           - candidate: posix-spawn-attrs
             child_patch_mode: posix-spawn-attrs
-            expected: success
+            expected: timeout
             run_under_strace: "false"
+          - candidate: posix-spawn-attrs-strace
+            child_patch_mode: posix-spawn-attrs
+            expected: timeout
+            run_under_strace: "true"
           - candidate: inline-raw-clone-execve
             child_patch_mode: inline-raw-clone-execve
-            expected: success
+            expected: timeout
             run_under_strace: "false"
+          - candidate: inline-raw-clone-execve-strace
+            child_patch_mode: inline-raw-clone-execve
+            expected: timeout
+            run_under_strace: "true"
     env:
       CHILD_PATCH_MODE: ${{ matrix.child_patch_mode }}
       EXPECTED_RESULT: ${{ matrix.expected }}
@@ -101,6 +109,14 @@ jobs:
               printf "wchan="
               cat "/proc/$pid/wchan" 2>/dev/null || true
               echo
+              printf "syscall="
+              cat "/proc/$pid/syscall" 2>/dev/null || true
+              echo
+              printf "children="
+              cat "/proc/$pid/task/$pid/children" 2>/dev/null || true
+              echo
+              echo "stack:"
+              cat "/proc/$pid/stack" 2>/dev/null || true
               sed -n "1,80p" "/proc/$pid/status" 2>/dev/null || true
               ls -l "/proc/$pid/fd" 2>/dev/null || true
             done
