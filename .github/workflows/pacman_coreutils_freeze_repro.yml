@@ -1,0 +1,162 @@
+name: Pacman coreutils freeze repro
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Pacman-based Termux Docker image to test.
+        required: true
+        default: termux/termux-docker-pacman:aarch64
+      timeout_seconds:
+        description: Seconds before a case is treated as frozen.
+        required: true
+        default: "300"
+
+permissions:
+  contents: read
+
+jobs:
+  actions-container:
+    name: actions container / ${{ matrix.case }}
+    runs-on: ubuntu-24.04-arm
+    container:
+      image: ${{ inputs.image }}
+      options: --privileged
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: baseline-no-upgrade
+            prep: ""
+            command: pacman -S coreutils --noconfirm --overwrite=*
+          - case: baseline-after-upgrade
+            prep: pacman -Syu --noconfirm
+            command: pacman -S coreutils --noconfirm --overwrite=*
+          - case: noscriptlet-after-upgrade
+            prep: pacman -Syu --noconfirm
+            command: pacman -S coreutils --noconfirm --overwrite=* --noscriptlet
+          - case: manual-alternatives
+            prep: pacman -S coreutils --noconfirm --overwrite=* --noscriptlet
+            command: PA_VERBOSE=true pacman-alternatives -Ea cat --overwrite
+          - case: hook-stdin
+            prep: pacman -S coreutils --noconfirm --overwrite=* --noscriptlet
+            command: printf '%s\n' '/data/data/com.termux/files/usr/share/pacman-alternatives/cat.alt' | PA_VERBOSE=true /data/data/com.termux/files/usr/share/libalpm/scripts/run-pacman-alternatives enable
+    env:
+      REPRO_CASE: ${{ matrix.case }}
+      REPRO_COMMAND: ${{ matrix.command }}
+      REPRO_IMAGE: ${{ inputs.image }}
+      REPRO_PREP: ${{ matrix.prep }}
+      REPRO_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+    steps:
+      - name: Run repro case inside Actions container
+        run: |
+          set -eu
+
+          dump_processes() {
+            echo "::group::process dump"
+            ps -ef || true
+            timeout 30 /entrypoint.sh login -c "ps -ef || true; command -v pacman-alternatives || true; command -v update-alternatives || true; ls -l \"\$PREFIX/share/libalpm/hooks\" \"\$PREFIX/share/libalpm/scripts\" \"\$PREFIX/share/pacman-alternatives\" 2>/dev/null || true" || true
+            echo "::endgroup::"
+          }
+
+          run_termux() {
+            label=$1
+            command=$2
+
+            if [ -z "$command" ]; then
+              return 0
+            fi
+
+            echo "::group::$label"
+            set +e
+            timeout "$REPRO_TIMEOUT_SECONDS" /entrypoint.sh login -c "set -eux; $command"
+            status=$?
+            set -e
+            echo "status=$status"
+            if [ "$status" -eq 124 ]; then
+              echo "::error::$label timed out after ${REPRO_TIMEOUT_SECONDS}s"
+              dump_processes
+            elif [ "$status" -ne 0 ]; then
+              echo "::error::$label failed with status $status"
+              dump_processes
+            fi
+            echo "::endgroup::"
+            return "$status"
+          }
+
+          echo "image=$REPRO_IMAGE"
+          echo "case=$REPRO_CASE"
+          run_termux "prep" "$REPRO_PREP"
+          run_termux "case" "$REPRO_COMMAND"
+
+  docker-run:
+    name: docker run / ${{ matrix.case }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: baseline-after-upgrade
+            prep: pacman -Syu --noconfirm
+            command: pacman -S coreutils --noconfirm --overwrite=*
+          - case: noscriptlet-after-upgrade
+            prep: pacman -Syu --noconfirm
+            command: pacman -S coreutils --noconfirm --overwrite=* --noscriptlet
+          - case: manual-alternatives
+            prep: pacman -S coreutils --noconfirm --overwrite=* --noscriptlet
+            command: PA_VERBOSE=true pacman-alternatives -Ea cat --overwrite
+          - case: hook-stdin
+            prep: pacman -S coreutils --noconfirm --overwrite=* --noscriptlet
+            command: printf '%s\n' '/data/data/com.termux/files/usr/share/pacman-alternatives/cat.alt' | PA_VERBOSE=true /data/data/com.termux/files/usr/share/libalpm/scripts/run-pacman-alternatives enable
+    env:
+      REPRO_CASE: ${{ matrix.case }}
+      REPRO_COMMAND: ${{ matrix.command }}
+      REPRO_IMAGE: ${{ inputs.image }}
+      REPRO_PREP: ${{ matrix.prep }}
+      REPRO_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+    steps:
+      - name: Run repro case with docker run
+        run: |
+          set -eu
+
+          container_name="pacman-coreutils-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${REPRO_CASE}"
+          script='set -eux'
+          if [ -n "$REPRO_PREP" ]; then
+            script="$script
+          $REPRO_PREP"
+          fi
+          script="$script
+          $REPRO_COMMAND"
+
+          dump_container() {
+            echo "::group::docker container dump"
+            docker ps -a || true
+            docker top "$container_name" || true
+            docker logs "$container_name" || true
+            timeout 30 docker exec "$container_name" /entrypoint.sh login -c "ps -ef || true; command -v pacman-alternatives || true; command -v update-alternatives || true; ls -l \"\$PREFIX/share/libalpm/hooks\" \"\$PREFIX/share/libalpm/scripts\" \"\$PREFIX/share/pacman-alternatives\" 2>/dev/null || true" || true
+            echo "::endgroup::"
+          }
+
+          trap 'docker rm -f "$container_name" >/dev/null 2>&1 || true' EXIT
+
+          echo "image=$REPRO_IMAGE"
+          echo "case=$REPRO_CASE"
+          set +e
+          timeout "$REPRO_TIMEOUT_SECONDS" docker run \
+            --name "$container_name" \
+            --privileged \
+            "$REPRO_IMAGE" \
+            login -c "$script"
+          status=$?
+          set -e
+          echo "status=$status"
+          if [ "$status" -eq 124 ]; then
+            echo "::error::docker run timed out after ${REPRO_TIMEOUT_SECONDS}s"
+            dump_container
+          elif [ "$status" -ne 0 ]; then
+            echo "::error::docker run failed with status $status"
+            dump_container
+          fi
+          exit "$status"
