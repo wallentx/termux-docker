@@ -1,0 +1,245 @@
+name: Pacman patched source experiment
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Pacman-based Termux Docker image to test.
+        required: true
+        default: termux/termux-docker-pacman:aarch64
+      pacman_version:
+        description: Upstream pacman version to build.
+        required: true
+        default: "7.1.0"
+      timeout_seconds:
+        description: Seconds before the candidate test is treated as frozen.
+        required: true
+        default: "180"
+      diagnostic_after_seconds:
+        description: Seconds before dumping process state for a still-running test.
+        required: true
+        default: "90"
+
+permissions:
+  contents: read
+
+jobs:
+  source-candidate:
+    name: source candidate / ${{ matrix.candidate }}
+    runs-on: ubuntu-24.04-arm
+    container:
+      image: ${{ inputs.image }}
+      options: --privileged
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - candidate: termux-patch-control
+            skip_child_handle_free: "false"
+            expected: timeout
+          - candidate: skip-child-handle-free
+            skip_child_handle_free: "true"
+            expected: success
+    env:
+      EXPECTED_RESULT: ${{ matrix.expected }}
+      PACMAN_VERSION: ${{ inputs.pacman_version }}
+      REPRO_CANDIDATE: ${{ matrix.candidate }}
+      REPRO_DIAG_AFTER_SECONDS: ${{ inputs.diagnostic_after_seconds }}
+      REPRO_IMAGE: ${{ inputs.image }}
+      REPRO_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+      SKIP_CHILD_HANDLE_FREE: ${{ matrix.skip_child_handle_free }}
+    steps:
+      - name: Build patched pacman and test coreutils reinstall
+        run: |
+          set -eu
+
+          termux_tmp=/data/data/com.termux/files/usr/tmp
+          mkdir -p "$termux_tmp"
+          script="$termux_tmp/pacman-source-experiment-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${REPRO_CANDIDATE}.sh"
+          cat > "$script" <<'TERMUX_SCRIPT'
+          #!/data/data/com.termux/files/usr/bin/bash
+          set -euo pipefail
+
+          dump_processes() {
+            echo "::group::process dump"
+            ps -ef || true
+            for pid in $(ps -ef | awk "/[p]acman/ { print \$2 }"); do
+              echo "proc pid=$pid"
+              printf "cmdline="
+              tr "\000" " " < "/proc/$pid/cmdline" 2>/dev/null || true
+              echo
+              printf "wchan="
+              cat "/proc/$pid/wchan" 2>/dev/null || true
+              echo
+              sed -n "1,80p" "/proc/$pid/status" 2>/dev/null || true
+              ls -l "/proc/$pid/fd" 2>/dev/null || true
+            done
+            command -v pacman || true
+            command -v pacman-alternatives || true
+            command -v update-alternatives || true
+            ls -l "$PREFIX/share/libalpm/hooks" "$PREFIX/share/libalpm/scripts" "$PREFIX/share/pacman-alternatives" 2>/dev/null || true
+            echo "::endgroup::"
+          }
+
+          install_build_deps() {
+            pacman -Sy --noconfirm
+            pacman -S --needed --noconfirm \
+              bash \
+              clang \
+              curl \
+              gettext \
+              gpgme \
+              libandroid-glob \
+              libarchive \
+              libcurl \
+              make \
+              meson \
+              nettle \
+              ninja \
+              openssl \
+              patch \
+              tar \
+              xz
+            pacman -S --needed --noconfirm pkg-config || pacman -S --needed --noconfirm pkgconf
+          }
+
+          build_pacman() {
+            build_root="${TMPDIR:-$PREFIX/tmp}/pacman-source-${REPRO_CANDIDATE}"
+            src_dir="$build_root/pacman-${PACMAN_VERSION}"
+            build_dir="$src_dir/build"
+
+            rm -rf "$build_root"
+            mkdir -p "$build_root"
+
+            curl -L --fail --silent --show-error \
+              "https://gitlab.archlinux.org/pacman/pacman/-/releases/v${PACMAN_VERSION}/downloads/pacman-${PACMAN_VERSION}.tar.xz" \
+              -o "$build_root/pacman.tar.xz"
+            tar -C "$build_root" -xf "$build_root/pacman.tar.xz"
+
+            curl -L --fail --silent --show-error \
+              https://raw.githubusercontent.com/termux/termux-packages/master/packages/pacman/util.c.patch \
+              -o "$build_root/util.c.patch"
+            sed -i "s|@TERMUX_PREFIX@|$PREFIX|g" "$build_root/util.c.patch"
+            patch -d "$src_dir" -p1 < "$build_root/util.c.patch"
+
+            if [ "$SKIP_CHILD_HANDLE_FREE" = "true" ]; then
+              sed -i 's|^[[:space:]]*_alpm_handle_free(handle);|		/* skipped _alpm_handle_free(handle) before execv for Termux freeze experiment */|' \
+                "$src_dir/lib/libalpm/util.c"
+            fi
+
+            echo "::group::patched source markers"
+            grep -n "_alpm_handle_free(handle);\\|skipped _alpm_handle_free\\|execv(cmd, argv)\\|char ibuf" \
+              "$src_dir/lib/libalpm/util.c" || true
+            echo "::endgroup::"
+
+            meson setup "$build_dir" "$src_dir" \
+              --prefix="$PREFIX" \
+              --sysconfdir="$PREFIX/etc" \
+              --localstatedir="$PREFIX/var" \
+              -Dpkg-ext=.pkg.tar.xz \
+              -Dscriptlet-shell="$PREFIX/bin/bash" \
+              -Dmakepkg-template-dir="$PREFIX/share/makepkg-template" \
+              -Ddoc=disabled \
+              -Ddoxygen=disabled \
+              -Dcurl=enabled \
+              -Dcrypto=openssl \
+              -Dfile-seccomp=disabled \
+              -Dgpgme=enabled \
+              -Di18n=false
+
+            sed -i 's/$ARGS -o $out $in $LINK_ARGS/$ARGS -o $out $in $LINK_ARGS -landroid-glob/' \
+              "$build_dir/build.ninja"
+            ninja -C "$build_dir" -j"$(nproc 2>/dev/null || echo 2)"
+          }
+
+          test_candidate() {
+            build_root="${TMPDIR:-$PREFIX/tmp}/pacman-source-${REPRO_CANDIDATE}"
+            build_dir="$build_root/pacman-${PACMAN_VERSION}/build"
+            pacman_bin="$build_dir/src/pacman/pacman"
+            libalpm_dir="$build_dir/lib/libalpm"
+
+            test -x "$pacman_bin"
+
+            export LD_LIBRARY_PATH="$libalpm_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            "$pacman_bin" --version
+            "$pacman_bin" -Q pacman coreutils pacman-alternatives || true
+
+            echo "::group::candidate test"
+            "$pacman_bin" -S coreutils --noconfirm --overwrite='*' &
+            command_pid=$!
+            (
+              sleep "$REPRO_DIAG_AFTER_SECONDS"
+              if kill -0 "$command_pid" 2>/dev/null; then
+                echo "::warning::candidate still running after ${REPRO_DIAG_AFTER_SECONDS}s"
+                dump_processes
+              fi
+            ) &
+            diag_pid=$!
+
+            set +e
+            timeout "$REPRO_TIMEOUT_SECONDS" bash -c "while kill -0 $command_pid 2>/dev/null; do sleep 1; done"
+            monitor_status=$?
+            if [ "$monitor_status" -eq 124 ]; then
+              status=124
+              kill "$command_pid" 2>/dev/null || true
+              sleep 2
+              kill -9 "$command_pid" 2>/dev/null || true
+            else
+              wait "$command_pid"
+              status=$?
+            fi
+            kill "$diag_pid" 2>/dev/null || true
+            wait "$diag_pid" 2>/dev/null || true
+            set -e
+
+            echo "status=$status"
+            if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+              if [ "$EXPECTED_RESULT" = "timeout" ]; then
+                echo "::warning::candidate timed out after ${REPRO_TIMEOUT_SECONDS}s as expected"
+              else
+                echo "::error::candidate timed out after ${REPRO_TIMEOUT_SECONDS}s"
+              fi
+              dump_processes
+            elif [ "$status" -ne 0 ]; then
+              echo "::error::candidate failed with status $status"
+              dump_processes
+            fi
+            echo "::endgroup::"
+            return "$status"
+          }
+
+          echo "image=$REPRO_IMAGE"
+          echo "candidate=$REPRO_CANDIDATE"
+          echo "expected=$EXPECTED_RESULT"
+          echo "pacman_version=$PACMAN_VERSION"
+
+          install_build_deps
+          build_pacman
+
+          set +e
+          test_candidate
+          status=$?
+          set -e
+
+          if [ "$EXPECTED_RESULT" = "timeout" ]; then
+            if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+              echo "::notice::observed expected timeout for $REPRO_CANDIDATE"
+              exit 0
+            fi
+            echo "::error::expected timeout for $REPRO_CANDIDATE, got status $status"
+            exit 1
+          fi
+
+          if [ "$status" -eq 0 ]; then
+            echo "::notice::observed expected success for $REPRO_CANDIDATE"
+            exit 0
+          fi
+
+          echo "::error::expected success for $REPRO_CANDIDATE, got status $status"
+          exit "$status"
+          TERMUX_SCRIPT
+
+          chmod +x "$script"
+          /entrypoint.sh login -c \
+            "EXPECTED_RESULT='$EXPECTED_RESULT' PACMAN_VERSION='$PACMAN_VERSION' REPRO_CANDIDATE='$REPRO_CANDIDATE' REPRO_DIAG_AFTER_SECONDS='$REPRO_DIAG_AFTER_SECONDS' REPRO_IMAGE='$REPRO_IMAGE' REPRO_TIMEOUT_SECONDS='$REPRO_TIMEOUT_SECONDS' SKIP_CHILD_HANDLE_FREE='$SKIP_CHILD_HANDLE_FREE' bash '$script'"
