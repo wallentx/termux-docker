@@ -39,6 +39,10 @@ jobs:
             child_patch_mode: control
             expected: timeout
             run_under_strace: "false"
+          - candidate: run-chroot-canary
+            child_patch_mode: run-chroot-canary
+            expected: failure
+            run_under_strace: "true"
           - candidate: trace-child-entry
             child_patch_mode: trace-child-entry
             expected: timeout
@@ -89,6 +93,8 @@ jobs:
               echo
               echo "stack:"
               cat "/proc/$pid/stack" 2>/dev/null || true
+              echo "maps libalpm/pacman-source:"
+              grep -E 'libalpm|pacman-source' "/proc/$pid/maps" 2>/dev/null || true
               echo "threads:"
               for task in "/proc/$pid/task"/*; do
                 [ -d "$task" ] || continue
@@ -651,6 +657,24 @@ jobs:
                   -e '/if(cwdfd >= 0) {/i\		syscall(SYS_write, 2, "PACMAN_CHILD after_fd_setup\\n", sizeof("PACMAN_CHILD after_fd_setup\\n") - 1);' \
                   "$src_dir/lib/libalpm/util.c"
                 ;;
+              run-chroot-canary)
+                python - "$src_dir/lib/libalpm/util.c" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          text = path.read_text()
+          pattern = r'(int\s+_alpm_run_chroot\s*\([^)]*\)\s*\{)'
+          replacement = r'''\1
+              _alpm_log(handle, ALPM_LOG_ERROR, _("PACMAN_CANARY _alpm_run_chroot reached for %s\n"), cmd);
+              return 77;'''
+          text, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+          if count != 1:
+              raise SystemExit("could not insert _alpm_run_chroot canary")
+          path.write_text(text)
+          PY
+                ;;
               *)
                 echo "::error::unknown CHILD_PATCH_MODE=$CHILD_PATCH_MODE"
                 exit 1
@@ -658,7 +682,7 @@ jobs:
             esac
 
             echo "::group::patched source markers"
-            grep -n "PACMAN_CHILD\\|PACMAN_PARENT\\|environ\\|termux_raw_syscall\\|posix_spawn\\|spawn file action\\|pid = .*SYS_clone\\|pid = fork\\|pid = vfork\\|close(0)\\|close(1)\\|close(2)\\|dup2\\|chdir(\"/\"\\|setenv(\"SHLVL\"\\|unsetenv(\"BASH_ENV\"\\|umask(0022)\\|_alpm_reset_signals()\\|_alpm_handle_free(handle)\\|skipped .* before execv\\|execv(cmd, argv)\\|SYS_execve\\|_exit(1)\\|char ibuf" \
+            grep -n "PACMAN_CHILD\\|PACMAN_PARENT\\|PACMAN_CANARY\\|environ\\|termux_raw_syscall\\|posix_spawn\\|spawn file action\\|pid = .*SYS_clone\\|pid = fork\\|pid = vfork\\|close(0)\\|close(1)\\|close(2)\\|dup2\\|chdir(\"/\"\\|setenv(\"SHLVL\"\\|unsetenv(\"BASH_ENV\"\\|umask(0022)\\|_alpm_reset_signals()\\|_alpm_handle_free(handle)\\|skipped .* before execv\\|execv(cmd, argv)\\|SYS_execve\\|_exit(1)\\|char ibuf" \
               "$src_dir/lib/libalpm/util.c" || true
             echo "::endgroup::"
 
@@ -700,6 +724,14 @@ jobs:
             fi
 
             export LD_LIBRARY_PATH="$libalpm_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            echo "::group::runtime library probe"
+            echo "pacman_bin=$pacman_bin"
+            echo "libalpm_dir=$libalpm_dir"
+            echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+            ls -l "$pacman_bin" "$libalpm_dir" "$libalpm_dir"/libalpm*.so* "$PREFIX"/lib/libalpm*.so* 2>/dev/null || true
+            grep -aH "PACMAN_CHILD\\|PACMAN_PARENT\\|PACMAN_CANARY" "$pacman_bin" "$libalpm_dir"/libalpm*.so* 2>/dev/null || true
+            ldd "$pacman_bin" 2>/dev/null || true
+            echo "::endgroup::"
             "$pacman_bin" --version
             "$pacman_bin" -Q pacman coreutils pacman-alternatives || true
 
@@ -746,6 +778,13 @@ jobs:
               fi
               dump_processes
               if [ "$RUN_UNDER_STRACE" = "true" ]; then
+                echo "::group::strace grep summary"
+                for trace_file in "$trace_prefix".*; do
+                  [ -e "$trace_file" ] || continue
+                  echo "== $trace_file =="
+                  grep -nE "PACMAN_|clone\\(|execve\\(|execveat\\(|socketpair\\(|ppoll\\(|futex\\(|libalpm" "$trace_file" | tail -n 160 || true
+                done
+                echo "::endgroup::"
                 echo "::group::strace tails"
                 for trace_file in "$trace_prefix".*; do
                   [ -e "$trace_file" ] || continue
@@ -758,6 +797,13 @@ jobs:
               echo "::error::candidate failed with status $status"
               dump_processes
               if [ "$RUN_UNDER_STRACE" = "true" ]; then
+                echo "::group::strace grep summary"
+                for trace_file in "$trace_prefix".*; do
+                  [ -e "$trace_file" ] || continue
+                  echo "== $trace_file =="
+                  grep -nE "PACMAN_|clone\\(|execve\\(|execveat\\(|socketpair\\(|ppoll\\(|futex\\(|libalpm" "$trace_file" | tail -n 160 || true
+                done
+                echo "::endgroup::"
                 echo "::group::strace tails"
                 for trace_file in "$trace_prefix".*; do
                   [ -e "$trace_file" ] || continue
@@ -803,6 +849,15 @@ jobs:
               exit 0
             fi
             echo "::error::expected timeout for $REPRO_CANDIDATE, got status $status"
+            exit 1
+          fi
+
+          if [ "$EXPECTED_RESULT" = "failure" ]; then
+            if [ "$status" -ne 0 ] && [ "$status" -ne 124 ] && [ "$status" -ne 137 ]; then
+              echo "::notice::observed expected failure for $REPRO_CANDIDATE"
+              exit 0
+            fi
+            echo "::error::expected failure for $REPRO_CANDIDATE, got status $status"
             exit 1
           fi
 
