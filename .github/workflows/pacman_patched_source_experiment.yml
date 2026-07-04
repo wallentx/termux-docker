@@ -39,10 +39,14 @@ jobs:
             child_patch_mode: control
             expected: timeout
             run_under_strace: "false"
-          - candidate: fork-preinit-only
-            child_patch_mode: fork-preinit-only
-            expected: success
-            run_under_strace: "false"
+          - candidate: trace-child-entry
+            child_patch_mode: trace-child-entry
+            expected: timeout
+            run_under_strace: "true"
+          - candidate: raw-clone-child-entry
+            child_patch_mode: raw-clone-child-entry
+            expected: timeout
+            run_under_strace: "true"
     env:
       CHILD_PATCH_MODE: ${{ matrix.child_patch_mode }}
       EXPECTED_RESULT: ${{ matrix.expected }}
@@ -85,6 +89,16 @@ jobs:
               echo
               echo "stack:"
               cat "/proc/$pid/stack" 2>/dev/null || true
+              echo "threads:"
+              for task in "/proc/$pid/task"/*; do
+                [ -d "$task" ] || continue
+                tid="${task##*/}"
+                printf "tid=%s wchan=" "$tid"
+                cat "$task/wchan" 2>/dev/null || true
+                printf " syscall="
+                cat "$task/syscall" 2>/dev/null || true
+                echo
+              done
               sed -n "1,80p" "/proc/$pid/status" 2>/dev/null || true
               ls -l "/proc/$pid/fd" 2>/dev/null || true
             done
@@ -611,6 +625,10 @@ jobs:
                   "$src_dir/lib/libalpm/util.c"
                 ;;
               trace-child-entry|raw-clone-child-entry)
+                sed -i \
+                  -e '/^[[:space:]]*pid = fork();/i\		syscall(SYS_write, 2, "PACMAN_PARENT before_child_create\\n", sizeof("PACMAN_PARENT before_child_create\\n") - 1);' \
+                  -e '/^[[:space:]]*pid = fork();/a\		if(pid == 0) syscall(SYS_write, 2, "PACMAN_CHILD returned_from_child_create\\n", sizeof("PACMAN_CHILD returned_from_child_create\\n") - 1); else if(pid > 0) syscall(SYS_write, 2, "PACMAN_PARENT returned_from_child_create\\n", sizeof("PACMAN_PARENT returned_from_child_create\\n") - 1);' \
+                  "$src_dir/lib/libalpm/util.c"
                 if [ "$CHILD_PATCH_MODE" = "raw-clone-child-entry" ]; then
                   sed -i 's|^[[:space:]]*pid = fork();|	pid = syscall(SYS_clone, SIGCHLD, NULL, NULL, NULL, NULL);|' \
                     "$src_dir/lib/libalpm/util.c"
@@ -640,7 +658,7 @@ jobs:
             esac
 
             echo "::group::patched source markers"
-            grep -n "PACMAN_CHILD\\|environ\\|termux_raw_syscall\\|posix_spawn\\|spawn file action\\|pid = .*SYS_clone\\|pid = fork\\|pid = vfork\\|close(0)\\|close(1)\\|close(2)\\|dup2\\|chdir(\"/\"\\|setenv(\"SHLVL\"\\|unsetenv(\"BASH_ENV\"\\|umask(0022)\\|_alpm_reset_signals()\\|_alpm_handle_free(handle)\\|skipped .* before execv\\|execv(cmd, argv)\\|SYS_execve\\|_exit(1)\\|char ibuf" \
+            grep -n "PACMAN_CHILD\\|PACMAN_PARENT\\|environ\\|termux_raw_syscall\\|posix_spawn\\|spawn file action\\|pid = .*SYS_clone\\|pid = fork\\|pid = vfork\\|close(0)\\|close(1)\\|close(2)\\|dup2\\|chdir(\"/\"\\|setenv(\"SHLVL\"\\|unsetenv(\"BASH_ENV\"\\|umask(0022)\\|_alpm_reset_signals()\\|_alpm_handle_free(handle)\\|skipped .* before execv\\|execv(cmd, argv)\\|SYS_execve\\|_exit(1)\\|char ibuf" \
               "$src_dir/lib/libalpm/util.c" || true
             echo "::endgroup::"
 
