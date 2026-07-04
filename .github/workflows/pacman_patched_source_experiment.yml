@@ -545,7 +545,7 @@ jobs:
 
           path = Path(sys.argv[1])
           text = path.read_text()
-          text = text.replace("#include <poll.h>\n", "#include <poll.h>\n#include <spawn.h>\n", 1)
+          text = text.replace("#include <poll.h>\n", "#include <poll.h>\n#include <spawn.h>\n#include <dlfcn.h>\n", 1)
           if "extern char **environ;\n" not in text:
               if '#include "filelist.h"\n' in text:
                   text = text.replace('#include "filelist.h"\n', '#include "filelist.h"\n\nextern char **environ;\n', 1)
@@ -556,20 +556,32 @@ jobs:
           parent_marker = "\t\t/* this code runs for the parent only (wait on the child) */\n"
           start = text.index(start_marker)
           parent = text.index(parent_marker, start)
-          spawn_block = """    /* Test posix_spawn with pre-initialized termux-exec wrappers. */
+          spawn_block = """    /* Test posix_spawn with dynamically pre-initialized termux-exec wrappers. */
               {
-                  extern int execveat(int, const char *, char *const [], char *const [], int);
-                  extern int execvpe(const char *, char *const [], char *const []);
                   char *const dummy_argv[] = { NULL };
                   char *const dummy_envp[] = { NULL };
                   pid_t dummy_pid;
-                  execve("", dummy_argv, dummy_envp);
-                  execveat(-1, "", dummy_argv, dummy_envp, 0);
-                  execv("", dummy_argv);
-                  execvp("", dummy_argv);
-                  execvpe("", dummy_argv, dummy_envp);
-                  posix_spawn(&dummy_pid, "", NULL, NULL, dummy_argv, dummy_envp);
-                  posix_spawnp(&dummy_pid, "", NULL, NULL, dummy_argv, dummy_envp);
+
+                  int (*fn_execve)(const char *, char *const [], char *const []) = dlsym(RTLD_DEFAULT, "execve");
+                  if (fn_execve) fn_execve("", dummy_argv, dummy_envp);
+
+                  int (*fn_execveat)(int, const char *, char *const [], char *const [], int) = dlsym(RTLD_DEFAULT, "execveat");
+                  if (fn_execveat) fn_execveat(-1, "", dummy_argv, dummy_envp, 0);
+
+                  int (*fn_execv)(const char *, char *const []) = dlsym(RTLD_DEFAULT, "execv");
+                  if (fn_execv) fn_execv("", dummy_argv);
+
+                  int (*fn_execvp)(const char *, char *const []) = dlsym(RTLD_DEFAULT, "execvp");
+                  if (fn_execvp) fn_execvp("", dummy_argv);
+
+                  int (*fn_execvpe)(const char *, char *const [], char *const []) = dlsym(RTLD_DEFAULT, "execvpe");
+                  if (fn_execvpe) fn_execvpe("", dummy_argv, dummy_envp);
+
+                  int (*fn_spawn)(pid_t *, const char *, const void *, const void *, char *const [], char *const []) = dlsym(RTLD_DEFAULT, "posix_spawn");
+                  if (fn_spawn) fn_spawn(&dummy_pid, "", NULL, NULL, dummy_argv, dummy_envp);
+
+                  int (*fn_spawnp)(pid_t *, const char *, const void *, const void *, char *const [], char *const []) = dlsym(RTLD_DEFAULT, "posix_spawnp");
+                  if (fn_spawnp) fn_spawnp(&dummy_pid, "", NULL, NULL, dummy_argv, dummy_envp);
               }
 
               {
