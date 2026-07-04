@@ -11,6 +11,10 @@ on:
         description: Seconds before a case is treated as frozen.
         required: true
         default: "300"
+      diagnostic_after_seconds:
+        description: Seconds before dumping process state for a still-running case.
+        required: true
+        default: "240"
 
 permissions:
   contents: read
@@ -48,6 +52,7 @@ jobs:
     env:
       REPRO_CASE: ${{ matrix.case }}
       REPRO_COMMAND: ${{ matrix.command }}
+      REPRO_DIAG_AFTER_SECONDS: ${{ inputs.diagnostic_after_seconds }}
       REPRO_IMAGE: ${{ inputs.image }}
       REPRO_PREP: ${{ matrix.prep }}
       REPRO_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
@@ -66,18 +71,44 @@ jobs:
           run_termux() {
             label=$1
             command=$2
+            diag_after=$REPRO_DIAG_AFTER_SECONDS
 
             if [ -z "$command" ]; then
               return 0
             fi
+            if [ "$diag_after" -ge "$REPRO_TIMEOUT_SECONDS" ]; then
+              diag_after=$((REPRO_TIMEOUT_SECONDS / 2))
+            fi
 
             echo "::group::$label"
+            /entrypoint.sh login -c "set -eux; $command" &
+            command_pid=$!
+            (
+              sleep "$diag_after"
+              if kill -0 "$command_pid" 2>/dev/null; then
+                echo "::warning::$label still running after ${diag_after}s"
+                dump_processes
+              fi
+            ) &
+            diag_pid=$!
+
             set +e
-            timeout "$REPRO_TIMEOUT_SECONDS" /entrypoint.sh login -c "set -eux; $command"
-            status=$?
+            timeout "$REPRO_TIMEOUT_SECONDS" sh -c "while kill -0 $command_pid 2>/dev/null; do sleep 1; done"
+            monitor_status=$?
+            if [ "$monitor_status" -eq 124 ]; then
+              status=124
+              kill "$command_pid" 2>/dev/null || true
+              sleep 2
+              kill -9 "$command_pid" 2>/dev/null || true
+            else
+              wait "$command_pid"
+              status=$?
+            fi
+            kill "$diag_pid" 2>/dev/null || true
+            wait "$diag_pid" 2>/dev/null || true
             set -e
             echo "status=$status"
-            if [ "$status" -eq 124 ]; then
+            if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
               echo "::error::$label timed out after ${REPRO_TIMEOUT_SECONDS}s"
               dump_processes
             elif [ "$status" -ne 0 ]; then
@@ -119,6 +150,7 @@ jobs:
     env:
       REPRO_CASE: ${{ matrix.case }}
       REPRO_COMMAND: ${{ matrix.command }}
+      REPRO_DIAG_AFTER_SECONDS: ${{ inputs.diagnostic_after_seconds }}
       REPRO_IMAGE: ${{ inputs.image }}
       REPRO_PREP: ${{ matrix.prep }}
       REPRO_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
@@ -154,11 +186,23 @@ jobs:
             --name "$container_name" \
             --privileged \
             "$REPRO_IMAGE" \
-            login -c "$script"
+            login -c "$script" &
+          run_pid=$!
+          (
+            sleep "$REPRO_DIAG_AFTER_SECONDS"
+            if kill -0 "$run_pid" 2>/dev/null; then
+              echo "::warning::docker run still running after ${REPRO_DIAG_AFTER_SECONDS}s"
+              dump_container
+            fi
+          ) &
+          diag_pid=$!
+          wait "$run_pid"
           status=$?
+          kill "$diag_pid" 2>/dev/null || true
+          wait "$diag_pid" 2>/dev/null || true
           set -e
           echo "status=$status"
-          if [ "$status" -eq 124 ]; then
+          if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
             echo "::error::docker run timed out after ${REPRO_TIMEOUT_SECONDS}s"
             dump_container
           elif [ "$status" -ne 0 ]; then
