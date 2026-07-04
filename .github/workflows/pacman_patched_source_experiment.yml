@@ -43,9 +43,15 @@ jobs:
             expected: timeout
           - candidate: skip-child-env
             child_patch_mode: skip-env
-            expected: success
+            expected: timeout
           - candidate: minimal-child-pre-exec
             child_patch_mode: minimal-pre-exec
+            expected: timeout
+          - candidate: raw-syscall-execve
+            child_patch_mode: raw-execve
+            expected: success
+          - candidate: minimal-raw-syscall-execve
+            child_patch_mode: minimal-raw-execve
             expected: success
     env:
       CHILD_PATCH_MODE: ${{ matrix.child_patch_mode }}
@@ -206,6 +212,22 @@ jobs:
                   -e 's|^[[:space:]]*_alpm_handle_free(handle);|		/* skipped _alpm_handle_free(handle) before execv for Termux freeze experiment */|' \
                   "$src_dir/lib/libalpm/util.c"
                 ;;
+              raw-execve)
+                sed -i '/#include <sys\/syscall.h>/a extern char **environ;' "$src_dir/lib/libalpm/util.c"
+                sed -i 's|^[[:space:]]*execv(cmd, argv);|		syscall(SYS_execve, cmd, argv, environ);|' \
+                  "$src_dir/lib/libalpm/util.c"
+                ;;
+              minimal-raw-execve)
+                sed -i '/#include <sys\/syscall.h>/a extern char **environ;' "$src_dir/lib/libalpm/util.c"
+                sed -i \
+                  -e 's|^[[:space:]]*setenv("SHLVL", "1", 0);|		/* skipped setenv("SHLVL", "1", 0) before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*unsetenv("BASH_ENV");|		/* skipped unsetenv("BASH_ENV") before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*umask(0022);|		/* skipped umask(0022) before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*_alpm_reset_signals();|		/* skipped _alpm_reset_signals() before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*_alpm_handle_free(handle);|		/* skipped _alpm_handle_free(handle) before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*execv(cmd, argv);|		syscall(SYS_execve, cmd, argv, environ);|' \
+                  "$src_dir/lib/libalpm/util.c"
+                ;;
               *)
                 echo "::error::unknown CHILD_PATCH_MODE=$CHILD_PATCH_MODE"
                 exit 1
@@ -213,7 +235,7 @@ jobs:
             esac
 
             echo "::group::patched source markers"
-            grep -n "setenv(\"SHLVL\"\\|unsetenv(\"BASH_ENV\"\\|umask(0022)\\|_alpm_reset_signals()\\|_alpm_handle_free(handle)\\|skipped .* before execv\\|execv(cmd, argv)\\|char ibuf" \
+            grep -n "environ\\|setenv(\"SHLVL\"\\|unsetenv(\"BASH_ENV\"\\|umask(0022)\\|_alpm_reset_signals()\\|_alpm_handle_free(handle)\\|skipped .* before execv\\|execv(cmd, argv)\\|SYS_execve\\|char ibuf" \
               "$src_dir/lib/libalpm/util.c" || true
             echo "::endgroup::"
 
