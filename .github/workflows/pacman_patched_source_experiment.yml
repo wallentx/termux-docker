@@ -183,10 +183,19 @@ jobs:
           test_candidate() {
             build_root="${TMPDIR:-$PREFIX/tmp}/pacman-source-${REPRO_CANDIDATE}"
             build_dir="$build_root/pacman-${PACMAN_VERSION}/build"
-            pacman_bin="$build_dir/src/pacman/pacman"
+            pacman_bin="$build_dir/pacman"
+            if [ ! -x "$pacman_bin" ]; then
+              pacman_bin="$build_dir/src/pacman/pacman"
+            fi
             libalpm_dir="$build_dir/lib/libalpm"
 
-            test -x "$pacman_bin"
+            if [ ! -x "$pacman_bin" ]; then
+              echo "::group::built pacman artifacts"
+              find "$build_dir" -maxdepth 4 \( -name 'pacman*' -o -name 'libalpm*.so*' \) -exec ls -l {} \; || true
+              echo "::endgroup::"
+              echo "::error::built pacman binary not found"
+              return 127
+            fi
 
             export LD_LIBRARY_PATH="$libalpm_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
             "$pacman_bin" --version
