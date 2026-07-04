@@ -39,44 +39,8 @@ jobs:
             child_patch_mode: control
             expected: timeout
             run_under_strace: "false"
-          - candidate: trace-child-entry
-            child_patch_mode: trace-child-entry
-            expected: timeout
-            run_under_strace: "false"
-          - candidate: strace-child-entry
-            child_patch_mode: trace-child-entry
-            expected: timeout
-            run_under_strace: "true"
-          - candidate: raw-clone-child-entry
-            child_patch_mode: raw-clone-child-entry
-            expected: timeout
-            run_under_strace: "false"
-          - candidate: vfork-minimal-raw-execve
-            child_patch_mode: vfork-minimal-raw-execve
-            expected: timeout
-            run_under_strace: "false"
-          - candidate: posix-spawn-hooks
-            child_patch_mode: posix-spawn-hooks
-            expected: timeout
-            run_under_strace: "false"
-          - candidate: posix-spawn-attrs
-            child_patch_mode: posix-spawn-attrs
-            expected: timeout
-            run_under_strace: "false"
-          - candidate: posix-spawn-attrs-strace
-            child_patch_mode: posix-spawn-attrs
-            expected: timeout
-            run_under_strace: "true"
-          - candidate: inline-raw-clone-execve
-            child_patch_mode: inline-raw-clone-execve
-            expected: timeout
-            run_under_strace: "false"
-          - candidate: inline-raw-clone-execve-strace
-            child_patch_mode: inline-raw-clone-execve
-            expected: timeout
-            run_under_strace: "true"
-          - candidate: posix-spawn-preinit-exec
-            child_patch_mode: posix-spawn-preinit-exec
+          - candidate: fork-preinit-only
+            child_patch_mode: fork-preinit-only
             expected: success
             run_under_strace: "false"
     env:
@@ -538,112 +502,58 @@ jobs:
           path.write_text(text)
           PY
                 ;;
-              posix-spawn-preinit-exec)
-                python - "$src_dir/lib/libalpm/util.c" <<'PY'
+              fork-preinit-only)
+                # ONLY patch pacman.c — pre-init termux-exec dlsym pointers.
+                # Do NOT touch util.c — keep original fork()+execv() code path.
+                # termux-exec only wraps: execve, execv, execvp, execlp,
+                # execl, execle, execvpe (NOT execveat/posix_spawn/posix_spawnp).
+                python - "$src_dir/src/pacman/pacman.c" <<'PY'
           import sys
           from pathlib import Path
 
-          # First, patch pacman.c entry point to run pre-initialization at main() startup
-          pacman_c = Path(sys.argv[1]).parent.parent.parent / "src/pacman/pacman.c"
-          text = pacman_c.read_text()
-          text = text.replace('#include <stdlib.h>', '#include <stdlib.h>\n#include <dlfcn.h>', 1)
-          helper = """
-          static void preinit_termux_exec(void) {
-              char *const dummy_argv[] = { NULL };
-              char *const dummy_envp[] = { NULL };
-              void *dummy_pid;
-
-              int (*fn_execve)(const char *, char *const [], char *const []) = dlsym(RTLD_DEFAULT, "execve");
-              if (fn_execve) fn_execve("", dummy_argv, dummy_envp);
-
-              int (*fn_execveat)(int, const char *, char *const [], char *const [], int) = dlsym(RTLD_DEFAULT, "execveat");
-              if (fn_execveat) fn_execveat(-1, "", dummy_argv, dummy_envp, 0);
-
-              int (*fn_execv)(const char *, char *const []) = dlsym(RTLD_DEFAULT, "execv");
-              if (fn_execv) fn_execv("", dummy_argv);
-
-              int (*fn_execvp)(const char *, char *const []) = dlsym(RTLD_DEFAULT, "execvp");
-              if (fn_execvp) fn_execvp("", dummy_argv);
-
-              int (*fn_execvpe)(const char *, char *const [], char *const []) = dlsym(RTLD_DEFAULT, "execvpe");
-              if (fn_execvpe) fn_execvpe("", dummy_argv, dummy_envp);
-
-              int (*fn_spawn)(void *, const char *, const void *, const void *, char *const [], char *const []) = dlsym(RTLD_DEFAULT, "posix_spawn");
-              if (fn_spawn) fn_spawn(&dummy_pid, "", NULL, NULL, dummy_argv, dummy_envp);
-
-              int (*fn_spawnp)(void *, const char *, const void *, const void *, char *const [], char *const []) = dlsym(RTLD_DEFAULT, "posix_spawnp");
-              if (fn_spawnp) fn_spawnp(&dummy_pid, "", NULL, NULL, dummy_argv, dummy_envp);
-          }
-          """
-          text = text.replace("int main(int argc, char *argv[])", helper + "\nint main(int argc, char *argv[])", 1)
-          text = text.replace("int main(int argc, char *argv[])\n{", "int main(int argc, char *argv[])\n{\n\tpreinit_termux_exec();", 1)
-          pacman_c.write_text(text)
-
-          # Now patch util.c to use standard posix_spawn (same as posix-spawn-hooks)
           path = Path(sys.argv[1])
           text = path.read_text()
-          text = text.replace("#include <poll.h>\n", "#include <poll.h>\n#include <spawn.h>\n", 1)
-          if "extern char **environ;\n" not in text:
-              if '#include "filelist.h"\n' in text:
-                  text = text.replace('#include "filelist.h"\n', '#include "filelist.h"\n\nextern char **environ;\n', 1)
-              else:
-                  text = text.replace('#include "sandbox.h"\n', '#include "sandbox.h"\n\nextern char **environ;\n', 1)
 
-          start_marker = "\t/* fork- parent and child each have separate code blocks below */\n"
-          parent_marker = "\t\t/* this code runs for the parent only (wait on the child) */\n"
-          start = text.index(start_marker)
-          parent = text.index(parent_marker, start)
-          spawn_block = """    /* Avoid bionic fork child handlers in pacman hook execution on Termux. */
-              {
-                  posix_spawn_file_actions_t actions;
-                  int spawn_ret = posix_spawn_file_actions_init(&actions);
-                  mode_t oldmask;
+          # Add dlfcn.h for dlsym
+          text = text.replace('#include <stdlib.h>', '#include <stdlib.h>\n#include <dlfcn.h>', 1)
 
-                  if(spawn_ret != 0) {
-                      _alpm_log(handle, ALPM_LOG_ERROR, _("could not initialize spawn actions (%s)\\n"), strerror(spawn_ret));
-                      retval = 1;
-                      goto cleanup;
-                  }
+          # Pre-init function: call each exec wrapper with empty args to force
+          # termux-exec's lazy dlsym(RTLD_NEXT, ...) to resolve NOW, in the
+          # safe single-threaded parent context.
+          helper = """
+          static void preinit_termux_exec(void) {
+              /* Force termux-exec (LD_PRELOAD) to resolve its internal
+               * dlsym(RTLD_NEXT, ...) pointers NOW, while single-threaded.
+               * Without this, the child side of fork() triggers a lazy
+               * dlsym inside the wrapper, which deadlocks on Bionic's
+               * g_dl_mutex (held by parent at fork time). */
+              char *const empty_argv[] = { NULL };
+              char *const empty_envp[] = { NULL };
 
-          #define CHECK_SPAWN_ACTION(expr) do { \\
-                  spawn_ret = (expr); \\
-                  if(spawn_ret != 0) { \\
-                      posix_spawn_file_actions_destroy(&actions); \\
-                      _alpm_log(handle, ALPM_LOG_ERROR, _("could not set spawn file action (%s)\\n"), strerror(spawn_ret)); \\
-                      retval = 1; \\
-                      goto cleanup; \\
-                  } \\
-              } while(0)
+              /* These are the only functions termux-exec actually wraps.
+               * Calling with empty path returns ENOENT but forces the
+               * dlsym resolution side-effect inside the wrapper. */
+              int (*fn_execve)(const char *, char *const [], char *const [])
+                  = dlsym(RTLD_DEFAULT, "execve");
+              if (fn_execve) fn_execve("", empty_argv, empty_envp);
 
-                  CHECK_SPAWN_ACTION(posix_spawn_file_actions_adddup2(&actions, child2parent_pipefd[HEAD], 1));
-                  CHECK_SPAWN_ACTION(posix_spawn_file_actions_adddup2(&actions, child2parent_pipefd[HEAD], 2));
-                  CHECK_SPAWN_ACTION(posix_spawn_file_actions_adddup2(&actions, parent2child_pipefd[TAIL], 0));
-                  CHECK_SPAWN_ACTION(posix_spawn_file_actions_addclose(&actions, parent2child_pipefd[TAIL]));
-                  CHECK_SPAWN_ACTION(posix_spawn_file_actions_addclose(&actions, parent2child_pipefd[HEAD]));
-                  CHECK_SPAWN_ACTION(posix_spawn_file_actions_addclose(&actions, child2parent_pipefd[TAIL]));
-                  CHECK_SPAWN_ACTION(posix_spawn_file_actions_addclose(&actions, child2parent_pipefd[HEAD]));
-                  if(cwdfd >= 0) {
-                      CHECK_SPAWN_ACTION(posix_spawn_file_actions_addclose(&actions, cwdfd));
-                  }
+              int (*fn_execv)(const char *, char *const [])
+                  = dlsym(RTLD_DEFAULT, "execv");
+              if (fn_execv) fn_execv("", empty_argv);
 
-          #undef CHECK_SPAWN_ACTION
+              int (*fn_execvp)(const char *, char *const [])
+                  = dlsym(RTLD_DEFAULT, "execvp");
+              if (fn_execvp) fn_execvp("", empty_argv);
 
-                  setenv("SHLVL", "1", 0);
-                  unsetenv("BASH_ENV");
-                  oldmask = umask(0022);
-                  spawn_ret = posix_spawn(&pid, cmd, &actions, NULL, argv, environ);
-                  umask(oldmask);
-                  posix_spawn_file_actions_destroy(&actions);
-                  if(spawn_ret != 0) {
-                      _alpm_log(handle, ALPM_LOG_ERROR, _("call to posix_spawn failed (%s)\\n"), strerror(spawn_ret));
-                      retval = 1;
-                      goto cleanup;
-                  }
-              }
-
-              {
+              int (*fn_execvpe)(const char *, char *const [], char *const [])
+                  = dlsym(RTLD_DEFAULT, "execvpe");
+              if (fn_execvpe) fn_execvpe("", empty_argv, empty_envp);
+          }
           """
-          text = text[:start] + spawn_block + text[parent:]
+          text = text.replace("int main(int argc, char *argv[])",
+                              helper + "\nint main(int argc, char *argv[])", 1)
+          text = text.replace("int main(int argc, char *argv[])\n{",
+                              "int main(int argc, char *argv[])\n{\n\tpreinit_termux_exec();", 1)
           path.write_text(text)
           PY
                 ;;
