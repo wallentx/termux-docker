@@ -36,19 +36,25 @@ jobs:
       matrix:
         include:
           - candidate: termux-patch-control
-            skip_child_handle_free: "false"
+            child_patch_mode: control
             expected: timeout
           - candidate: skip-child-handle-free
-            skip_child_handle_free: "true"
+            child_patch_mode: skip-handle-free
+            expected: timeout
+          - candidate: skip-child-env
+            child_patch_mode: skip-env
+            expected: success
+          - candidate: minimal-child-pre-exec
+            child_patch_mode: minimal-pre-exec
             expected: success
     env:
+      CHILD_PATCH_MODE: ${{ matrix.child_patch_mode }}
       EXPECTED_RESULT: ${{ matrix.expected }}
       PACMAN_VERSION: ${{ inputs.pacman_version }}
       REPRO_CANDIDATE: ${{ matrix.candidate }}
       REPRO_DIAG_AFTER_SECONDS: ${{ inputs.diagnostic_after_seconds }}
       REPRO_IMAGE: ${{ inputs.image }}
       REPRO_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
-      SKIP_CHILD_HANDLE_FREE: ${{ matrix.skip_child_handle_free }}
     steps:
       - name: Build patched pacman and test coreutils reinstall
         run: |
@@ -178,13 +184,36 @@ jobs:
             rm -f "$src_dir/scripts/libmakepkg/executable/sudo.sh.in"
             rm -f "$src_dir/scripts/libmakepkg/executable/fakeroot.sh.in"
 
-            if [ "$SKIP_CHILD_HANDLE_FREE" = "true" ]; then
-              sed -i 's|^[[:space:]]*_alpm_handle_free(handle);|		/* skipped _alpm_handle_free(handle) before execv for Termux freeze experiment */|' \
-                "$src_dir/lib/libalpm/util.c"
-            fi
+            case "$CHILD_PATCH_MODE" in
+              control)
+                ;;
+              skip-handle-free)
+                sed -i 's|^[[:space:]]*_alpm_handle_free(handle);|		/* skipped _alpm_handle_free(handle) before execv for Termux freeze experiment */|' \
+                  "$src_dir/lib/libalpm/util.c"
+                ;;
+              skip-env)
+                sed -i \
+                  -e 's|^[[:space:]]*setenv("SHLVL", "1", 0);|		/* skipped setenv("SHLVL", "1", 0) before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*unsetenv("BASH_ENV");|		/* skipped unsetenv("BASH_ENV") before execv for Termux freeze experiment */|' \
+                  "$src_dir/lib/libalpm/util.c"
+                ;;
+              minimal-pre-exec)
+                sed -i \
+                  -e 's|^[[:space:]]*setenv("SHLVL", "1", 0);|		/* skipped setenv("SHLVL", "1", 0) before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*unsetenv("BASH_ENV");|		/* skipped unsetenv("BASH_ENV") before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*umask(0022);|		/* skipped umask(0022) before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*_alpm_reset_signals();|		/* skipped _alpm_reset_signals() before execv for Termux freeze experiment */|' \
+                  -e 's|^[[:space:]]*_alpm_handle_free(handle);|		/* skipped _alpm_handle_free(handle) before execv for Termux freeze experiment */|' \
+                  "$src_dir/lib/libalpm/util.c"
+                ;;
+              *)
+                echo "::error::unknown CHILD_PATCH_MODE=$CHILD_PATCH_MODE"
+                exit 1
+                ;;
+            esac
 
             echo "::group::patched source markers"
-            grep -n "_alpm_handle_free(handle);\\|skipped _alpm_handle_free\\|execv(cmd, argv)\\|char ibuf" \
+            grep -n "setenv(\"SHLVL\"\\|unsetenv(\"BASH_ENV\"\\|umask(0022)\\|_alpm_reset_signals()\\|_alpm_handle_free(handle)\\|skipped .* before execv\\|execv(cmd, argv)\\|char ibuf" \
               "$src_dir/lib/libalpm/util.c" || true
             echo "::endgroup::"
 
@@ -270,11 +299,13 @@ jobs:
               dump_processes
             fi
             echo "::endgroup::"
+            set +e
             return "$status"
           }
 
           echo "image=$REPRO_IMAGE"
           echo "candidate=$REPRO_CANDIDATE"
+          echo "child_patch_mode=$CHILD_PATCH_MODE"
           echo "expected=$EXPECTED_RESULT"
           echo "pacman_version=$PACMAN_VERSION"
 
@@ -316,4 +347,4 @@ jobs:
 
           chmod +x "$script"
           /entrypoint.sh login -c \
-            "EXPECTED_RESULT='$EXPECTED_RESULT' PACMAN_VERSION='$PACMAN_VERSION' REPRO_CANDIDATE='$REPRO_CANDIDATE' REPRO_DIAG_AFTER_SECONDS='$REPRO_DIAG_AFTER_SECONDS' REPRO_IMAGE='$REPRO_IMAGE' REPRO_TIMEOUT_SECONDS='$REPRO_TIMEOUT_SECONDS' SKIP_CHILD_HANDLE_FREE='$SKIP_CHILD_HANDLE_FREE' bash '$script'"
+            "CHILD_PATCH_MODE='$CHILD_PATCH_MODE' EXPECTED_RESULT='$EXPECTED_RESULT' PACMAN_VERSION='$PACMAN_VERSION' REPRO_CANDIDATE='$REPRO_CANDIDATE' REPRO_DIAG_AFTER_SECONDS='$REPRO_DIAG_AFTER_SECONDS' REPRO_IMAGE='$REPRO_IMAGE' REPRO_TIMEOUT_SECONDS='$REPRO_TIMEOUT_SECONDS' bash '$script'"
