@@ -544,7 +544,7 @@ jobs:
           from pathlib import Path
 
           # First, patch pacman.c entry point to run pre-initialization at main() startup
-          pacman_c = Path(sys.argv[1]).parent.parent / "src/pacman/pacman.c"
+          pacman_c = Path(sys.argv[1]).parent.parent.parent / "src/pacman/pacman.c"
           text = pacman_c.read_text()
           text = text.replace('#include <stdlib.h>', '#include <stdlib.h>\n#include <dlfcn.h>', 1)
           helper = """
