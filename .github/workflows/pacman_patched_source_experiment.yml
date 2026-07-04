@@ -60,6 +60,8 @@ jobs:
           cat > "$script" <<'TERMUX_SCRIPT'
           #!/data/data/com.termux/files/usr/bin/bash
           set -euo pipefail
+          export HOME="${TMPDIR:-$PREFIX/tmp}/pacman-source-home-${REPRO_CANDIDATE}"
+          mkdir -p "$HOME"
 
           dump_processes() {
             echo "::group::process dump"
