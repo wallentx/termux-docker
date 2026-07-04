@@ -144,11 +144,39 @@ jobs:
               -o "$build_root/pacman.tar.xz"
             tar -C "$build_root" -xf "$build_root/pacman.tar.xz"
 
-            curl -L --fail --silent --show-error \
-              https://raw.githubusercontent.com/termux/termux-packages/master/packages/pacman/util.c.patch \
-              -o "$build_root/util.c.patch"
-            sed -i "s|@TERMUX_PREFIX@|$PREFIX|g" "$build_root/util.c.patch"
-            patch -d "$src_dir" -p1 < "$build_root/util.c.patch"
+            termux_packages_ref=master
+            patch_names="
+              add.c.patch
+              check.c.patch
+              diskspace.c.patch
+              doc-meson.build.patch
+              executable_meson.build.patch
+              makepkg.conf.in.patch
+              makepkg.sh.in.patch
+              pacman-key.sh.in.patch
+              pacman.c.patch
+              pacman.conf.in.patch
+              repo-add.sh.in.patch
+              trans.c.patch
+              util.c.patch
+            "
+            for patch_name in $patch_names; do
+              patch_file="$build_root/$patch_name"
+              curl -L --fail --silent --show-error \
+                "https://raw.githubusercontent.com/termux/termux-packages/${termux_packages_ref}/packages/pacman/${patch_name}" \
+                -o "$patch_file"
+              sed -i "s|@TERMUX_PREFIX@|$PREFIX|g" "$patch_file"
+              patch -d "$src_dir" -p1 < "$patch_file"
+            done
+
+            termux_arch="$(uname -m)"
+            case "$termux_arch" in
+              armv7l|armv8l) termux_arch=arm ;;
+              i*86) termux_arch=i686 ;;
+            esac
+            sed -i "s/@TERMUX_ARCH@/${termux_arch}/g" "$src_dir/etc/pacman.conf.in" "$src_dir/etc/makepkg.conf.in"
+            rm -f "$src_dir/scripts/libmakepkg/executable/sudo.sh.in"
+            rm -f "$src_dir/scripts/libmakepkg/executable/fakeroot.sh.in"
 
             if [ "$SKIP_CHILD_HANDLE_FREE" = "true" ]; then
               sed -i 's|^[[:space:]]*_alpm_handle_free(handle);|		/* skipped _alpm_handle_free(handle) before execv for Termux freeze experiment */|' \
